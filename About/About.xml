@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+    <name>Vextex - Smart Outfit AI</name>
+    <author>Vextex</author>
+    <supportedVersions>
+        <li>1.5</li>
+        <li>1.6</li>
+    </supportedVersions>
+    <packageId>vextex.smartoutfit</packageId>
+    <description>Vextex makes colonists intelligently choose the best clothing based on protection, thermal insulation, material composition, and combat role. Stronger colonists prioritize better gear, melee fighters wear heavy armor, and ranged shooters avoid aim penalties.
+
+Features:
+- Combat role detection (Melee / Ranged / NonCombatant)
+- Material tier evaluation (Hyperweave &gt; Devilstrand &gt; Synthread &gt; Cloth)
+- Skill-based gear prioritization (strongest colonists get best gear)
+- Dynamic biome-aware insulation weighting
+- Configurable weights via mod settings
+- Compatible with Combat Extended, Vanilla Expanded, and 10+ popular mods</description>
+    <modDependencies>
+        <li>
+            <packageId>brrainz.harmony</packageId>
+            <displayName>Harmony</displayName>
+            <steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl>
+        </li>
+    </modDependencies>
+    <loadAfter>
+        <li>brrainz.harmony</li>
+        <li>ludeon.rimworld</li>
+        <!-- Mods that modify the apparel system — load after for correct patch priority -->
+        <li>CETeam.CombatExtended</li>
+        <li>OskarPotocki.VanillaFactionsExpanded.Core</li>
+        <li>OskarPotocki.VFE.Core</li>
+        <li>OskarPotocki.VFE.Insectoids</li>
+        <li>Dubwise.DubsBadHygiene</li>
+        <li>Dubwise.DubsApparelTweaks</li>
+        <li>Dubwise.ApparelTweaks</li>
+        <li>sarg.alphaanimals</li>
+        <li>kentington.saveourship2</li>
+        <li>Torann.ARimworldOfMagic</li>
+        <li>Atlas.AndroidTiers</li>
+        <li>Atlas.AndroidTiersReforged</li>
+        <li>latta.infused</li>
+        <li>latta.infused2</li>
+    </loadAfter>
+</ModMetaData>
+

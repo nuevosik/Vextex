@@ -1,0 +1,7 @@
+Source/Vextex/obj/
+Source/Vextex/bin/
+.vs/
+*.user
+*.suo
+Thumbs.db
+
