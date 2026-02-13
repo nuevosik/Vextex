@@ -5,8 +5,9 @@ using Verse;
 namespace Vextex.Compat
 {
     /// <summary>
-    /// Resolves optional StatDefs (vanilla or modded) once at startup.
+    /// Resolves optional StatDefs (vanilla or modded) once at startup (ModCompat.DetectAll).
     /// Use these cached refs instead of DefDatabase.GetNamedSilentFail in hot paths.
+    /// CE-specific stats (Bulk, WornBulk) are resolved in CombatExtendedCompat.DetectCE.
     /// All lookups are safe; missing stats are null and callers must check.
     /// </summary>
     public static class OptionalStatsResolver

@@ -112,6 +112,10 @@ namespace Vextex.Core
                 float ideologyBonus = IdeologyCompat.GetApparelPreceptBonus(pawn, apparel);
                 // Royalty: psycasters should keep Eltex/psychic gear (PsychicSensitivity, PsychicEntropyRecoveryRate)
                 float psychicScore = GetPsychicApparelScore(pawn, apparel);
+                // Royalty: nobles must keep title-required apparel (Royal Vest, Corset, Robe) or lose permissions + mood
+                float royaltyRequiredBonus = RoyaltyCompat.GetRequiredApparelBonus(pawn, apparel.def);
+                // Ideology/Trait: nudists and "nudity required" get severe penalty for torso/legs coverage
+                float nudityPenalty = IdeologyCompat.GetNudityApparelPenalty(pawn, apparel);
 
                 // Anomaly detection: warn about extreme component values
                 DetectAnomalies(apparel, armorScore, insulationScore, materialScore, penaltyScore);
@@ -120,7 +124,7 @@ namespace Vextex.Core
                     qualityScore, durabilityFactor, penaltyScore, pawn, w,
                     contributorPawn: pawn, contributorApparel: apparel, role, roleMult, stage);
 
-                result += utilityScore + toxicScore + ideologyBonus + psychicScore;
+                result += utilityScore + toxicScore + ideologyBonus + psychicScore + royaltyRequiredBonus + nudityPenalty;
 
                 _scoreCache[key] = result;
                 return result;

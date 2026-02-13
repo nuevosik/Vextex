@@ -77,6 +77,12 @@ namespace Vextex.Patches
                     return;
                 if (!pawn.IsColonist || pawn.IsPrisoner || pawn.Dead)
                     return;
+                // Drafted pawns must not swap apparel mid-combat (mods may force job anyway)
+                if (pawn.Drafted)
+                {
+                    __result = -1f;
+                    return;
+                }
                 if (__result < -999f)
                     return;
                 // Never recommend swapping to something the pawn is already wearing (avoids loops from other mods or edge cases)
