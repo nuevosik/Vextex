@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using RimWorld;
 using Verse;
 using Vextex.Compat;
+using Vextex.Comps;
 using Vextex.Settings;
 
 namespace Vextex.Core
@@ -92,6 +93,8 @@ namespace Vextex.Core
                 // Papel granular: reavaliado a cada chamada (hauler/cleaner/crafter/doctor/hunter/melee/ranged)
                 PawnRoleDetector.PawnRole pawnRole = PawnRoleDetector.DetectRole(pawn);
                 PawnRoleDetector.BodyPartArmorWeights bodyWeights = PawnRoleDetector.GetBodyPartWeights(pawnRole);
+                if (w.adaptiveMemoryEnabled)
+                    bodyWeights = ApplyAdaptiveBodyPartTrauma(pawn, bodyWeights);
                 ColonistRoleDetector.CombatRole role = ColonistRoleDetector.DetectRole(pawn);
                 ColonistRoleDetector.RoleMultipliers roleMult = ColonistRoleDetector.GetMultipliers(role);
                 ColonyStage stage = GetColonyStage(pawn, w);
@@ -107,11 +110,12 @@ namespace Vextex.Core
                 float durabilityFactor = CalculateDurabilityFactor(apparel);
                 float penaltyScore = CalculatePenalties(apparel, roleMult, w, pawn, pawnRole, w.mobilityWeight);
 
-                // Thermal safety robusta: previsão 24–48h, buffer ±5°C, xenotypes
+                // Thermal safety robusta: previsão 24–48h, buffer ±5°C, xenotypes; memória adaptativa aumenta peso após trauma
+                float effectiveThermalWeight = GetEffectiveThermalWeight(pawn, w);
                 float forecastTemp = ThermalSafetyHelper.GetForecastTemperature(pawn.Map);
-                float thermalPenalty = ThermalSafetyHelper.GetThermalSafetyPenalty(pawn, apparel, forecastTemp) * (w.thermalSafetyWeight > 0 ? w.thermalSafetyWeight : 1f);
+                float thermalPenalty = ThermalSafetyHelper.GetThermalSafetyPenalty(pawn, apparel, forecastTemp) * effectiveThermalWeight;
                 penaltyScore += thermalPenalty;
-                float wideRangeBonus = ThermalSafetyHelper.GetWideRangeLayerBonus(pawn, apparel, pawn.apparel?.WornApparel) * (w.thermalSafetyWeight > 0 ? w.thermalSafetyWeight : 1f);
+                float wideRangeBonus = ThermalSafetyHelper.GetWideRangeLayerBonus(pawn, apparel, pawn.apparel?.WornApparel) * effectiveThermalWeight;
 
                 // Utility slots (Shield Belt, Jump Pack): high value for melee/ranged
                 float utilityScore = GetUtilitySlotScore(apparel, role);
@@ -138,16 +142,22 @@ namespace Vextex.Core
                 float toughArmorBonus = GetToughArmorBonus(pawn, apparel, roleMult);
                 float bloodlustMasochistArmorBonus = GetBloodlustMasochistArmorBonus(pawn, apparel);
 
+                bool isCombatFocusedDuringThreat = (pawnRole == PawnRoleDetector.PawnRole.Melee || pawnRole == PawnRoleDetector.PawnRole.Ranged || pawnRole == PawnRoleDetector.PawnRole.Hunter)
+                    && w.threatAware && ThreatAwareHelper.IsThreatActive(pawn.Map);
+                float moodBonus = MoodComfortHelper.GetMoodComfortBonus(pawn, apparel, w.moodThreshold, w.moodComfortWeight > 0 ? w.moodComfortWeight : 1f, isCombatFocusedDuringThreat);
+
                 DetectAnomalies(apparel, armorScore, insulationScore, materialScore, penaltyScore);
 
                 float result = ComposeScore(armorScore, insulationScore, materialScore,
                     qualityScore, durabilityFactor, penaltyScore, pawn, w,
                     contributorPawn: pawn, contributorApparel: apparel, role, roleMult, stage);
 
+                float adaptiveThermalBonus = GetAdaptiveThermalBonus(pawn, w);
                 result += utilityScore + toxicScore + ideologyBonus + ideologyForbiddenPenalty + psychicScore
                     + royaltyRequiredBonus + royaltyPrestigeBonus + nudityPenalty
                     + taintedPenalty + coverageBonus + distancePenalty + sterileBonus + heatResistBonus
-                    + wideRangeBonus + roleRelevantBonus + abrasivePenalty + toughArmorBonus + bloodlustMasochistArmorBonus;
+                    + wideRangeBonus + roleRelevantBonus + abrasivePenalty + toughArmorBonus + bloodlustMasochistArmorBonus
+                    + moodBonus + adaptiveThermalBonus;
 
                 _scoreCache[key] = result;
                 return result;
@@ -195,7 +205,9 @@ namespace Vextex.Core
                 enableMaterialEvaluation = true, enableSkillPriority = true, enableRoleDetection = true,
                 ceNormalizationFactor = 0f, ceSharpNormalization = 0f, ceBluntNormalization = 0f, ceHeatNormalization = 0f,
                 thermalSafetyWeight = 1.0f, mobilityWeight = 1.0f, prestigeIdeologyWeight = 1.0f,
-                hysteresisThreshold = 0.25f, threatAware = true, preferPrestigeWhenSafe = true
+                hysteresisThreshold = 0.25f, threatAware = true, preferPrestigeWhenSafe = true,
+                moodComfortWeight = 1.0f, moodThreshold = 0.4f, biotechSpecialRolesEnabled = true,
+                adaptiveMemoryEnabled = true, adaptiveThermalBoostPerTrauma = 0.5f
             };
         }
 
@@ -242,6 +254,11 @@ namespace Vextex.Core
 
                 if (float.IsNaN(ctx.VextexScore) || float.IsInfinity(ctx.VextexScore))
                     return ctx;
+
+                bool isCombatFocusedDuringThreat = (pawnRole == PawnRoleDetector.PawnRole.Melee || pawnRole == PawnRoleDetector.PawnRole.Ranged || pawnRole == PawnRoleDetector.PawnRole.Hunter)
+                    && w.threatAware && ThreatAwareHelper.IsThreatActive(pawn.Map);
+                ctx.MoodBonusRaw = MoodComfortHelper.GetMoodComfortBonus(pawn, candidate, w.moodThreshold, w.moodComfortWeight > 0 ? w.moodComfortWeight : 1f, isCombatFocusedDuringThreat);
+                ctx.AdaptiveThermalBonus = GetAdaptiveThermalBonus(pawn, w);
 
                 ctx.PowerPercentile = ColonistRoleDetector.GetPowerPercentile(pawn);
                 ctx.IsValid = true;
@@ -383,6 +400,49 @@ namespace Vextex.Core
             {
                 return 0f;
             }
+        }
+
+        /// <summary>Peso térmico efetivo: base + boost por trauma (cap 2f) quando adaptive memory enabled.</summary>
+        private static float GetEffectiveThermalWeight(Pawn pawn, ScoringWeights w)
+        {
+            float baseW = w.thermalSafetyWeight > 0 ? w.thermalSafetyWeight : 1f;
+            if (!w.adaptiveMemoryEnabled || pawn == null) return baseW;
+            var comp = pawn.GetComp<CompPawnApparelMemory>();
+            if (comp == null) return baseW;
+            float boost = comp.thermalTraumaCount * w.adaptiveThermalBoostPerTrauma;
+            return Math.Min(2f, baseW + boost);
+        }
+
+        /// <summary>Bônus de score por trauma térmico (apparel que melhora thermal safety).</summary>
+        private static float GetAdaptiveThermalBonus(Pawn pawn, ScoringWeights w)
+        {
+            if (!w.adaptiveMemoryEnabled || pawn == null) return 0f;
+            var comp = pawn.GetComp<CompPawnApparelMemory>();
+            if (comp == null || comp.thermalTraumaCount <= 0) return 0f;
+            return comp.thermalTraumaCount * w.adaptiveThermalBoostPerTrauma * 0.5f;
+        }
+
+        /// <summary>Aumenta pesos de partes do corpo que tiveram trauma (preferir proteção nessas partes).</summary>
+        private static PawnRoleDetector.BodyPartArmorWeights ApplyAdaptiveBodyPartTrauma(Pawn pawn, PawnRoleDetector.BodyPartArmorWeights weights)
+        {
+            if (pawn == null) return weights;
+            var comp = pawn.GetComp<CompPawnApparelMemory>();
+            if (comp == null || comp.bodyPartTrauma == null || comp.bodyPartTrauma.Count == 0) return weights;
+            BodyPartGroupDef torso = DefDatabase<BodyPartGroupDef>.GetNamedSilentFail("Torso");
+            BodyPartGroupDef head = DefDatabase<BodyPartGroupDef>.GetNamedSilentFail("Head");
+            BodyPartGroupDef neck = DefDatabase<BodyPartGroupDef>.GetNamedSilentFail("Neck");
+            BodyPartGroupDef legs = DefDatabase<BodyPartGroupDef>.GetNamedSilentFail("Legs");
+            float torsoAdd = torso != null ? comp.GetTraumaCountForPart(torso) * 0.3f : 0f;
+            float headAdd = head != null ? comp.GetTraumaCountForPart(head) * 0.3f : 0f;
+            float neckAdd = neck != null ? comp.GetTraumaCountForPart(neck) * 0.3f : 0f;
+            float limbsAdd = legs != null ? comp.GetTraumaCountForPart(legs) * 0.3f : 0f;
+            return new PawnRoleDetector.BodyPartArmorWeights
+            {
+                Torso = weights.Torso + torsoAdd,
+                Head = weights.Head + headAdd,
+                Neck = weights.Neck + neckAdd,
+                Limbs = weights.Limbs + limbsAdd
+            };
         }
 
         /// <summary>Multiplicador por parte do corpo: melee prioriza torso/limbs, ranged head/neck.</summary>
@@ -779,7 +839,11 @@ namespace Vextex.Core
                 float movePenaltyW = w.movePenaltyWeight * (mobilityWeight > 0 ? mobilityWeight : 1f);
                 if (PawnRoleDetector.RolePrioritizesMoveSpeed(pawnRole))
                     movePenaltyW *= 1.5f;
+                if (PawnRoleDetector.RolePrioritizesChildMobility(pawnRole))
+                    movePenaltyW *= 2f;
                 float aimPenaltyW = w.aimPenaltyWeight;
+                if (PawnRoleDetector.RolePrioritizesChildMobility(pawnRole))
+                    aimPenaltyW *= 1.5f;
                 float bulkPenaltyW = w.bulkPenaltyWeight;
 
                 // Penalidade forte para move speed: cada -0.1 c/s reduz score proporcionalmente

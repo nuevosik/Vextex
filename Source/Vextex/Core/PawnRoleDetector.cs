@@ -26,7 +26,11 @@ namespace Vextex.Core
             Cleaner,
             Crafter,
             Doctor,
-            Hunter
+            Hunter,
+            /// <summary>Biotech: grávida; prioriza segurança (move/manipulation, insulação), penaliza armor no torso.</summary>
+            Pregnant,
+            /// <summary>Biotech: criança; prioriza mobilidade máxima, penaliza apparel pesado ou que reduz sight/manipulation.</summary>
+            Child
         }
 
         /// <summary>Pesos por parte do corpo para armor: melee prioriza torso/limbs, ranged prioriza head/neck.</summary>
@@ -60,6 +64,15 @@ namespace Vextex.Core
                 Neck = 1.0f,
                 Limbs = 1.0f
             };
+
+            /// <summary>Pregnant: penaliza armor no torso (evita compressão).</summary>
+            public static readonly BodyPartArmorWeights Pregnant = new BodyPartArmorWeights
+            {
+                Torso = 0.3f,
+                Head = 1.0f,
+                Neck = 0.9f,
+                Limbs = 1.0f
+            };
         }
 
         /// <summary>
@@ -74,6 +87,14 @@ namespace Vextex.Core
             VextexSettings settings = VextexModHandler.Settings;
             if (settings != null && !settings.enableRoleDetection)
                 return PawnRole.NonCombatant;
+
+            // 0) Biotech: Pregnant e Child têm prioridade máxima quando special roles enabled
+            if (settings != null && settings.biotechSpecialRolesEnabled)
+            {
+                PawnRole biotechRole = GetRoleFromBiotech(pawn);
+                if (biotechRole != PawnRole.None)
+                    return biotechRole;
+            }
 
             // 1) Job atual tem prioridade para contexto imediato (médico em cirurgia, bombeiro, etc.)
             PawnRole jobRole = GetRoleFromCurrentJob(pawn);
@@ -106,6 +127,8 @@ namespace Vextex.Core
             {
                 case PawnRole.Melee: return BodyPartArmorWeights.Melee;
                 case PawnRole.Ranged: return BodyPartArmorWeights.Ranged;
+                case PawnRole.Pregnant: return BodyPartArmorWeights.Pregnant;
+                case PawnRole.Child:
                 default: return BodyPartArmorWeights.Default;
             }
         }
@@ -126,6 +149,43 @@ namespace Vextex.Core
         public static bool RolePrioritizesShootingAccuracy(PawnRole role)
         {
             return role == PawnRole.Hunter || role == PawnRole.Ranged;
+        }
+
+        /// <summary>Pregnant: alto peso em move speed/manipulation, insulação moderada, penalidade forte em armor torso.</summary>
+        public static bool RolePrioritizesPregnancySafety(PawnRole role)
+        {
+            return role == PawnRole.Pregnant;
+        }
+
+        /// <summary>Child: move speed máximo, penalidade pesada em apparel que reduz sight/manipulation ou pesa muito.</summary>
+        public static bool RolePrioritizesChildMobility(PawnRole role)
+        {
+            return role == PawnRole.Child;
+        }
+
+        private static PawnRole GetRoleFromBiotech(Pawn pawn)
+        {
+            if (pawn?.health?.hediffSet == null)
+                return PawnRole.None;
+            try
+            {
+                HediffDef pregnantDef = DefDatabase<HediffDef>.GetNamedSilentFail("PregnantHuman");
+                if (pregnantDef == null)
+                    pregnantDef = DefDatabase<HediffDef>.GetNamedSilentFail("Pregnant");
+                if (pregnantDef != null && pawn.health.hediffSet.HasHediff(pregnantDef))
+                    return PawnRole.Pregnant;
+
+                if (pawn.ageTracker != null)
+                {
+                    if (pawn.ageTracker.CurLifeStage?.defName != null && pawn.ageTracker.CurLifeStage.defName.IndexOf("Child", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return PawnRole.Child;
+                    float age = pawn.ageTracker.AgeBiologicalYearsFloat;
+                    if (age < 14f)
+                        return PawnRole.Child;
+                }
+            }
+            catch { }
+            return PawnRole.None;
         }
 
         private static PawnRole GetRoleFromCurrentJob(Pawn pawn)

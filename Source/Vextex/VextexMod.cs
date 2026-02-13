@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using RimWorld;
 using Verse;
 using Vextex.Compat;
+using Vextex.Comps;
 using Vextex.Settings;
 
 namespace Vextex
@@ -20,7 +22,7 @@ namespace Vextex
     [StaticConstructorOnStartup]
     public static class VextexMod
     {
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
 
         static VextexMod()
         {
@@ -70,11 +72,45 @@ namespace Vextex
                 {
                     Log.Warning($"[Vextex] Failed to inspect optimize apparel patches (non-fatal): {ex.Message}");
                 }
+
+                InjectApparelMemoryComp();
             }
             catch (Exception ex)
             {
                 Log.Error($"[Vextex] CRITICAL: Failed to apply Harmony patches! Error: {ex}");
                 Log.Error("[Vextex] The mod will not function correctly. Please report this with your mod list.");
+            }
+        }
+
+        /// <summary>Adiciona CompPawnApparelMemory a todas as raças humanlike para memória adaptativa.</summary>
+        private static void InjectApparelMemoryComp()
+        {
+            try
+            {
+                int added = 0;
+                foreach (ThingDef def in DefDatabase<ThingDef>.AllDefsListForReading)
+                {
+                    if (def?.race == null || !def.race.Humanlike) continue;
+                    if (def.comps == null)
+                        def.comps = new List<CompProperties>();
+                    bool hasAlready = false;
+                    for (int i = 0; i < def.comps.Count; i++)
+                    {
+                        if (def.comps[i] is CompProperties_PawnApparelMemory)
+                        { hasAlready = true; break; }
+                    }
+                    if (!hasAlready)
+                    {
+                        def.comps.Add(new CompProperties_PawnApparelMemory());
+                        added++;
+                    }
+                }
+                if (added > 0)
+                    Log.Message($"[Vextex] Apparel memory comp injected into {added} humanlike race(s).");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"[Vextex] Failed to inject apparel memory comp (non-fatal): " + ex.Message);
             }
         }
     }

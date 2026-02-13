@@ -58,6 +58,16 @@ namespace Vextex.Settings
         public bool threatAware;
         /// <summary>Royalty: priorizar apparel de prestige só se não comprometer proteção/thermal (configurável).</summary>
         public bool preferPrestigeWhenSafe;
+        /// <summary>Peso do bônus mood/comfort para pawns em low mood.</summary>
+        public float moodComfortWeight;
+        /// <summary>Threshold de mood (0–1): abaixo disso aplica bônus para Beauty/comfort.</summary>
+        public float moodThreshold;
+        /// <summary>Biotech: proteção especial para grávidas e crianças.</summary>
+        public bool biotechSpecialRolesEnabled;
+        /// <summary>Memória adaptativa: aumenta thermal/body part weight após traumas.</summary>
+        public bool adaptiveMemoryEnabled;
+        /// <summary>Boost de thermal safety por trauma térmico (cap aplicado no calculator).</summary>
+        public float adaptiveThermalBoostPerTrauma;
     }
 
     /// <summary>
@@ -134,6 +144,12 @@ namespace Vextex.Settings
         public bool threatAware = true;
         public bool preferPrestigeWhenSafe = true;
 
+        public float moodComfortWeight = 1.0f;
+        public float moodThreshold = 0.4f;
+        public bool biotechSpecialRolesEnabled = true;
+        public bool adaptiveMemoryEnabled = true;
+        public float adaptiveThermalBoostPerTrauma = 0.5f;
+
         /// <summary>
         /// Builds a ScoringWeights snapshot from the current global settings values.
         /// </summary>
@@ -173,7 +189,12 @@ namespace Vextex.Settings
                 prestigeIdeologyWeight = prestigeIdeologyWeight,
                 hysteresisThreshold = hysteresisThreshold,
                 threatAware = threatAware,
-                preferPrestigeWhenSafe = preferPrestigeWhenSafe
+                preferPrestigeWhenSafe = preferPrestigeWhenSafe,
+                moodComfortWeight = moodComfortWeight,
+                moodThreshold = moodThreshold,
+                biotechSpecialRolesEnabled = biotechSpecialRolesEnabled,
+                adaptiveMemoryEnabled = adaptiveMemoryEnabled,
+                adaptiveThermalBoostPerTrauma = adaptiveThermalBoostPerTrauma
             };
         }
 
@@ -216,6 +237,7 @@ namespace Vextex.Settings
                     w.earlyGameDaysThreshold = 40f; w.lateGameWealthThreshold = 120000f;
                     w.tierSWeight = 1.20f; w.tierAWeight = 1.15f; w.tierBWeight = 1.05f; w.tierCWeight = 1.00f; w.tierDWeight = 0.85f;
                     w.thermalSafetyWeight = 1.2f; w.mobilityWeight = 1.2f; w.prestigeIdeologyWeight = 1.3f; w.hysteresisThreshold = 0.3f; w.threatAware = false; w.preferPrestigeWhenSafe = true;
+                    w.moodComfortWeight = 1.8f; w.moodThreshold = 0.4f;
                     break;
                 case BehaviorPreset.CEHardcore:
                     w.armorWeight = 2.5f; w.insulationWeight = 0.6f; w.materialWeight = 1.4f; w.qualityWeight = 1.6f;
@@ -312,6 +334,7 @@ namespace Vextex.Settings
                     meleeThreshold = 10f; rangedThreshold = 8f; nonCombatantCeiling = 6f;
                     earlyGameDaysThreshold = 40f; lateGameWealthThreshold = 120000f;
                     tierSWeight = 1.20f; tierAWeight = 1.15f; tierBWeight = 1.05f; tierCWeight = 1.00f; tierDWeight = 0.85f;
+                    moodComfortWeight = 1.8f; moodThreshold = 0.4f;
                     break;
 
                 case BehaviorPreset.CEHardcore:
@@ -418,6 +441,11 @@ namespace Vextex.Settings
             Scribe_Values.Look(ref hysteresisThreshold, "hysteresisThreshold", 0.25f);
             Scribe_Values.Look(ref threatAware, "threatAware", true);
             Scribe_Values.Look(ref preferPrestigeWhenSafe, "preferPrestigeWhenSafe", true);
+            Scribe_Values.Look(ref moodComfortWeight, "moodComfortWeight", 1.0f);
+            Scribe_Values.Look(ref moodThreshold, "moodThreshold", 0.4f);
+            Scribe_Values.Look(ref biotechSpecialRolesEnabled, "biotechSpecialRolesEnabled", true);
+            Scribe_Values.Look(ref adaptiveMemoryEnabled, "adaptiveMemoryEnabled", true);
+            Scribe_Values.Look(ref adaptiveThermalBoostPerTrauma, "adaptiveThermalBoostPerTrauma", 0.5f);
         }
 
         public void DoWindowContents(UnityEngine.Rect inRect)
@@ -481,6 +509,8 @@ namespace Vextex.Settings
                 "Detect melee vs ranged colonists and adjust gear preference.");
             listing.CheckboxLabeled("Enable material evaluation", ref enableMaterialEvaluation,
                 "Evaluate material quality tiers (Hyperweave > Devilstrand > Cloth).");
+            listing.CheckboxLabeled("Special protection for pregnant pawns and children (Biotech)", ref biotechSpecialRolesEnabled,
+                "Pregnant pawns avoid heavy torso armor; children prioritize mobility and light apparel.");
 
             listing.GapLine();
 
@@ -590,10 +620,24 @@ namespace Vextex.Settings
             prestigeIdeologyWeight = listing.Slider(prestigeIdeologyWeight, 0f, 3f);
             listing.Label($"Hysteresis threshold (min % better to swap, 0.25 = 25%): {hysteresisThreshold:F2}");
             hysteresisThreshold = listing.Slider(hysteresisThreshold, 0.05f, 0.5f);
+            listing.Gap(4f);
+            listing.Label("Mood/Comfort (low-mood pawns prefer Beauty/comfortable apparel):");
+            listing.Label($"Mood/Comfort weight: {moodComfortWeight:F1}");
+            moodComfortWeight = listing.Slider(moodComfortWeight, 0f, 2f);
+            listing.Label($"Mood threshold (below this %, apply bonus; 0.4 = 40%): {moodThreshold:F2}");
+            moodThreshold = listing.Slider(moodThreshold, 0.2f, 0.5f);
             listing.CheckboxLabeled("Threat-aware (increase armor weight when raid/enemies nearby)", ref threatAware,
                 "When enabled, colonists prioritize armor when hostiles are present.");
             listing.CheckboxLabeled("Prefer prestige apparel when safe (Royalty)", ref preferPrestigeWhenSafe,
                 "When enabled, titled pawns prefer prestige apparel only if it does not compromise protection or thermal safety.");
+
+            listing.GapLine();
+            listing.Label("=== Advanced (Adaptive memory) ===");
+            listing.GapLine();
+            listing.CheckboxLabeled("Adaptive memory (trauma-based scoring)", ref adaptiveMemoryEnabled,
+                "After near-fatal hypo/hyperthermia or critical body part injury, pawns prefer thermal safety and protection on affected parts.");
+            listing.Label($"Thermal boost per trauma (capped in-game): {adaptiveThermalBoostPerTrauma:F2}");
+            adaptiveThermalBoostPerTrauma = listing.Slider(adaptiveThermalBoostPerTrauma, 0.1f, 1.5f);
 
             listing.GapLine();
 

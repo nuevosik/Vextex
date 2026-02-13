@@ -26,6 +26,10 @@ namespace Vextex.Core
         public float QualityScoreRaw;
         public float DurabilityFactor;
         public float PenaltyScoreRaw;
+        /// <summary>Bônus mood/comfort quando pawn em low mood (para debug breakdown).</summary>
+        public float MoodBonusRaw;
+        /// <summary>Boost de thermal safety por trauma adaptativo (para debug).</summary>
+        public float AdaptiveThermalBonus;
 
         // === Final weighted score for the candidate ===
         public float VextexScore;

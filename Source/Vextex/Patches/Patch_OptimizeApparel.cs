@@ -146,7 +146,12 @@ namespace Vextex.Patches
                     float oldScore = ctx.CurrentTotalScore;
                     float newScore = oldScore + ctx.NetGain;
                     float threshPct = ctx.CurrentTotalScore > 0f ? ctx.SwapThreshold / ctx.CurrentTotalScore : 0f;
-                    Log.Message($"[Vextex] {pawn.LabelShort} ({role}) | Score: {oldScore:F2} → {newScore:F2} (+{ctx.NetGain:F2}) | Threshold: {threshPct:P0} | Swap: {recommendSwap} | Breakdown: Thermal={ctx.InsulationScoreRaw:F2} Armor={ctx.ArmorScoreRaw:F2} Quality={ctx.QualityScoreRaw:F2} Penalties={ctx.PenaltyScoreRaw:F2}");
+                    string breakdown = $"Thermal={ctx.InsulationScoreRaw:F2} Armor={ctx.ArmorScoreRaw:F2} Quality={ctx.QualityScoreRaw:F2} Penalties={ctx.PenaltyScoreRaw:F2}";
+                    if (ctx.MoodBonusRaw != 0f)
+                        breakdown += $" Mood={ctx.MoodBonusRaw:+#0.00;-#0.00;0.00}";
+                    if (ctx.AdaptiveThermalBonus != 0f)
+                        breakdown += $" AdaptiveThermal={ctx.AdaptiveThermalBonus:+#0.00}";
+                    Log.Message($"[Vextex] {pawn.LabelShort} ({role}) | Score: {oldScore:F2} → {newScore:F2} (+{ctx.NetGain:F2}) | Threshold: {threshPct:P0} | Swap: {recommendSwap} | Breakdown: {breakdown}");
                 }
 
                 if (recommendSwap)
