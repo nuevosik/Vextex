@@ -132,5 +132,39 @@ namespace Vextex.Compat
                 return 0f;
             }
         }
+
+        /// <summary>
+        /// Returns a small bonus for prestige apparel when pawn has a title and preferPrestigeWhenSafe is true.
+        /// Only applied when the apparel does not compromise protection/thermal (caller should gate by armor/thermal score).
+        /// </summary>
+        public static float GetPrestigeApparelBonus(Pawn pawn, ThingDef apparelDef, bool preferPrestigeWhenSafe)
+        {
+            if (pawn == null || apparelDef == null || !preferPrestigeWhenSafe) return 0f;
+            TryResolve();
+            if (_royaltyProp == null) return 0f;
+            try
+            {
+                object royalty = _royaltyProp.GetValue(pawn);
+                if (royalty == null) return 0f;
+                object title = _highestTitleWithBedroomReqs?.Invoke(royalty, null);
+                if (title == null) return 0f;
+                object titleDef = _titleDefProp?.GetValue(title);
+                if (titleDef == null) return 0f;
+                Type titleDefType = titleDef.GetType();
+                var prestigeProp = titleDefType.GetProperty("PrestigeApparel", BindingFlags.Public | BindingFlags.Instance)
+                    ?? titleDefType.GetProperty("prestigeApparel", BindingFlags.Public | BindingFlags.Instance);
+                if (prestigeProp == null) return 0f;
+                var prestigeList = prestigeProp.GetValue(titleDef) as System.Collections.IList;
+                if (prestigeList == null) return 0f;
+                for (int i = 0; i < prestigeList.Count; i++)
+                {
+                    ThingDef def = prestigeList[i] as ThingDef;
+                    if (def == null) continue;
+                    if (def == apparelDef) return 3f;
+                }
+            }
+            catch { }
+            return 0f;
+        }
     }
 }

@@ -11,12 +11,15 @@ namespace Vextex.Patches
     [HarmonyPatch(typeof(JobGiver_OptimizeApparel), "ApparelScoreGain")]
     public static class Patch_ApparelScoreGain
     {
-        /// <summary>Hysteresis factor: net gain must exceed threshold by this ratio to recommend a swap.</summary>
-        private const float SwapHysteresisFactor = 1.25f;
-
         /// <summary>Minimum absolute net gain required to recommend a swap. Prevents infinite equip/unequip
-        /// when two items have nearly identical scores and the relative threshold fluctuates with current outfit.</summary>
+        /// when two items have nearly identical scores. Hysteresis % is from Mod Settings (e.g. 25%).</summary>
         private const float MinAbsoluteNetGain = 0.18f;
+
+        /// <summary>Throttle: colônias com mais que este número de pawns têm JobGiver espaçado.</summary>
+        private const int ThrottleColonyPawnCount = 15;
+
+        /// <summary>Quando throttle ativo, só permite optimize a cada N ticks por pawn.</summary>
+        private const int ThrottleTicksPerPawn = 1200;
 
         /// <summary>After recommending a swap for a pawn, ignore further recommendations for this pawn for this many ticks.
         /// Must be longer than the time to complete an optimize-apparel job (walk to item + equip), otherwise the pawn
@@ -35,6 +38,22 @@ namespace Vextex.Patches
             if (!_lastRecommendTickByPawn.TryGetValue(pawn.thingIDNumber, out int lastTick))
                 return false;
             return (tick - lastTick) < SwapCooldownTicks;
+        }
+
+        /// <summary>Throttle: quando colônia tem mais de 15 pawns, só permite optimize a cada ThrottleTicksPerPawn por pawn.</summary>
+        private static bool IsThrottled(Pawn pawn)
+        {
+            if (pawn?.Map == null) return false;
+            try
+            {
+                int colonistCount = pawn.Map.mapPawns?.FreeColonists?.Count ?? 0;
+                if (colonistCount <= ThrottleColonyPawnCount) return false;
+                int tick = Find.TickManager?.TicksGame ?? 0;
+                int bucket = (tick / ThrottleTicksPerPawn) % Math.Max(1, colonistCount);
+                int pawnBucket = pawn.thingIDNumber % Math.Max(1, colonistCount);
+                return bucket != pawnBucket;
+            }
+            catch { return false; }
         }
 
         /// <summary>Remove cooldown entries that have expired to avoid unbounded growth.</summary>
@@ -113,12 +132,22 @@ namespace Vextex.Patches
                                 $"Naked={ctx.IsNakedOnCoveredGroups}, PwrPct={ctx.PowerPercentile:F2}");
                 }
 
-                // === Single behavior: recommend swap only when gain is clear and not in cooldown ===
-                float effectiveThreshold = ctx.SwapThreshold * SwapHysteresisFactor;
+                // === Single behavior: recommend swap only when gain is clear (hysteresis from settings, e.g. 25% better) and not in cooldown ===
                 bool recommendSwap = ctx.NetGain > 0f
-                    && ctx.NetGain >= effectiveThreshold
+                    && ctx.NetGain >= ctx.SwapThreshold
                     && ctx.NetGain >= MinAbsoluteNetGain
-                    && !IsInCooldown(pawn);
+                    && !IsInCooldown(pawn)
+                    && !IsThrottled(pawn);
+
+                // === Debug logging (DevMode): pawn, role, score change, threshold, breakdown ===
+                if (settings != null && settings.debugLogging && Prefs.DevMode)
+                {
+                    PawnRoleDetector.PawnRole role = PawnRoleDetector.DetectRole(pawn);
+                    float oldScore = ctx.CurrentTotalScore;
+                    float newScore = oldScore + ctx.NetGain;
+                    float threshPct = ctx.CurrentTotalScore > 0f ? ctx.SwapThreshold / ctx.CurrentTotalScore : 0f;
+                    Log.Message($"[Vextex] {pawn.LabelShort} ({role}) | Score: {oldScore:F2} → {newScore:F2} (+{ctx.NetGain:F2}) | Threshold: {threshPct:P0} | Swap: {recommendSwap} | Breakdown: Thermal={ctx.InsulationScoreRaw:F2} Armor={ctx.ArmorScoreRaw:F2} Quality={ctx.QualityScoreRaw:F2} Penalties={ctx.PenaltyScoreRaw:F2}");
+                }
 
                 if (recommendSwap)
                 {

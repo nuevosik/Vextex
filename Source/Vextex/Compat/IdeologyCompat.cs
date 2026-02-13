@@ -66,6 +66,50 @@ namespace Vextex.Compat
         }
 
         /// <summary>
+        /// Returns a heavy penalty if the apparel is forbidden/disapproved by the pawn's ideology.
+        /// Ideology: penalidade pesada para apparel forbidden; bonus para favored já em GetApparelPreceptBonus.
+        /// </summary>
+        public static float GetApparelForbiddenPenalty(Pawn pawn, ThingDef apparelDef)
+        {
+            if (pawn == null || apparelDef == null) return 0f;
+            TryResolve();
+            if (_ideoProp == null) return 0f;
+            try
+            {
+                object ideo = _ideoProp.GetValue(pawn);
+                if (ideo == null) return 0f;
+                Type ideoType = ideo.GetType();
+                var preceptsProp = ideoType.GetProperty("PreceptsListForReading", BindingFlags.Public | BindingFlags.Instance)
+                    ?? ideoType.GetProperty("Precepts", BindingFlags.Public | BindingFlags.Instance);
+                if (preceptsProp == null) return 0f;
+                var precepts = preceptsProp.GetValue(ideo) as System.Collections.IList;
+                if (precepts == null) return 0f;
+                foreach (object precept in precepts)
+                {
+                    if (precept == null) continue;
+                    Type pt = precept.GetType();
+                    string name = pt.Name ?? "";
+                    if (name.IndexOf("Apparel", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    var defProp = pt.GetProperty("Def", BindingFlags.Public | BindingFlags.Instance);
+                    if (defProp == null) continue;
+                    var preceptDef = defProp.GetValue(precept) as Def;
+                    if (preceptDef?.defName == null) continue;
+                    bool forbidden = preceptDef.defName.IndexOf("Disapproved", StringComparison.OrdinalIgnoreCase) >= 0
+                        || preceptDef.defName.IndexOf("Forbidden", StringComparison.OrdinalIgnoreCase) >= 0
+                        || preceptDef.defName.IndexOf("Abhorrent", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!forbidden) continue;
+                    var apparelProp = precept.GetType().GetProperty("ApparelDef", BindingFlags.Public | BindingFlags.Instance)
+                        ?? precept.GetType().GetProperty("Apparel", BindingFlags.Public | BindingFlags.Instance);
+                    if (apparelProp == null) continue;
+                    var forbiddenDef = apparelProp.GetValue(precept) as ThingDef;
+                    if (forbiddenDef == apparelDef) return -30f;
+                }
+            }
+            catch { }
+            return 0f;
+        }
+
+        /// <summary>
         /// Returns a score bonus if the apparel is preferred/required by the pawn's ideology (Precept_Apparel).
         /// Returns 0 if Ideology not present or no match.
         /// </summary>

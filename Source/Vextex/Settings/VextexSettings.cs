@@ -24,7 +24,10 @@ namespace Vextex.Settings
         ComfortRP,
 
         /// <summary>Tuned for Combat Extended: high armor importance, bulk awareness.</summary>
-        CEHardcore
+        CEHardcore,
+
+        /// <summary>Survival Extreme: thermal weight very high, mobility low. Best for extreme biomes.</summary>
+        SurvivalExtreme
     }
 
     /// <summary>
@@ -42,12 +45,19 @@ namespace Vextex.Settings
         public bool enableMaterialEvaluation, enableSkillPriority, enableRoleDetection;
         /// <summary>Global override: when &gt; 0, used as divisor for Sharp, Blunt and Heat. 0 = use per-stat or defaults.</summary>
         public float ceNormalizationFactor;
-        /// <summary>CE Sharp armor divisor. 0 = use default (DefaultSharpNormalization).</summary>
-        public float ceSharpNormalization;
-        /// <summary>CE Blunt armor divisor. 0 = use default.</summary>
-        public float ceBluntNormalization;
-        /// <summary>CE Heat armor divisor. 0 = use default.</summary>
-        public float ceHeatNormalization;
+        public float ceSharpNormalization, ceBluntNormalization, ceHeatNormalization;
+        /// <summary>Peso de thermal safety (previsão 24–48h, buffer ±5°C, xenotypes).</summary>
+        public float thermalSafetyWeight;
+        /// <summary>Peso de mobility (move speed); usado junto com movePenaltyWeight.</summary>
+        public float mobilityWeight;
+        /// <summary>Peso de prestige/ideology (Royalty prestige, Ideology favored/forbidden).</summary>
+        public float prestigeIdeologyWeight;
+        /// <summary>Threshold de hysteresis: só permitir troca se novo outfit for pelo menos este percentual melhor (ex.: 0.25 = 25%).</summary>
+        public float hysteresisThreshold;
+        /// <summary>Threat-aware: aumentar peso de armor quando raid/inimigos próximos.</summary>
+        public bool threatAware;
+        /// <summary>Royalty: priorizar apparel de prestige só se não comprometer proteção/thermal (configurável).</summary>
+        public bool preferPrestigeWhenSafe;
     }
 
     /// <summary>
@@ -65,6 +75,8 @@ namespace Vextex.Settings
 
         // Diagnostics
         public bool enableVerboseLogging = false;
+        /// <summary>When true, log in DevMode: pawn name, role, score change, and main reasons (thermal, armor, etc.).</summary>
+        public bool debugLogging = false;
 
         /// <summary>
         /// When true, Vextex will not touch the optimize apparel logic (another mod controls it).
@@ -114,6 +126,14 @@ namespace Vextex.Settings
         public bool enablePerOutfitProfiles = false;
         public Dictionary<string, BehaviorPreset> outfitProfiles = new Dictionary<string, BehaviorPreset>();
 
+        // Novos pesos e toggles (Mod Settings)
+        public float thermalSafetyWeight = 1.0f;
+        public float mobilityWeight = 1.0f;
+        public float prestigeIdeologyWeight = 1.0f;
+        public float hysteresisThreshold = 0.25f;
+        public bool threatAware = true;
+        public bool preferPrestigeWhenSafe = true;
+
         /// <summary>
         /// Builds a ScoringWeights snapshot from the current global settings values.
         /// </summary>
@@ -147,7 +167,13 @@ namespace Vextex.Settings
                 ceNormalizationFactor = ceNormalizationFactor,
                 ceSharpNormalization = ceSharpNormalization,
                 ceBluntNormalization = ceBluntNormalization,
-                ceHeatNormalization = ceHeatNormalization
+                ceHeatNormalization = ceHeatNormalization,
+                thermalSafetyWeight = thermalSafetyWeight,
+                mobilityWeight = mobilityWeight,
+                prestigeIdeologyWeight = prestigeIdeologyWeight,
+                hysteresisThreshold = hysteresisThreshold,
+                threatAware = threatAware,
+                preferPrestigeWhenSafe = preferPrestigeWhenSafe
             };
         }
 
@@ -171,6 +197,7 @@ namespace Vextex.Settings
                     w.meleeThreshold = 8f; w.rangedThreshold = 6f; w.nonCombatantCeiling = 5f;
                     w.earlyGameDaysThreshold = 30f; w.lateGameWealthThreshold = 100000f;
                     w.tierSWeight = 1.15f; w.tierAWeight = 1.10f; w.tierBWeight = 1.00f; w.tierCWeight = 1.00f; w.tierDWeight = 0.90f;
+                    w.thermalSafetyWeight = 1.0f; w.mobilityWeight = 1.0f; w.prestigeIdeologyWeight = 1.0f; w.hysteresisThreshold = 0.25f; w.threatAware = true; w.preferPrestigeWhenSafe = true;
                     break;
                 case BehaviorPreset.CombatFocus:
                     w.armorWeight = 2.2f; w.insulationWeight = 0.7f; w.materialWeight = 1.2f; w.qualityWeight = 1.5f;
@@ -179,6 +206,7 @@ namespace Vextex.Settings
                     w.meleeThreshold = 6f; w.rangedThreshold = 5f; w.nonCombatantCeiling = 3f;
                     w.earlyGameDaysThreshold = 20f; w.lateGameWealthThreshold = 80000f;
                     w.tierSWeight = 1.30f; w.tierAWeight = 1.20f; w.tierBWeight = 1.00f; w.tierCWeight = 0.90f; w.tierDWeight = 0.80f;
+                    w.thermalSafetyWeight = 0.8f; w.mobilityWeight = 0.7f; w.prestigeIdeologyWeight = 0.8f; w.hysteresisThreshold = 0.2f; w.threatAware = true; w.preferPrestigeWhenSafe = false;
                     break;
                 case BehaviorPreset.ComfortRP:
                     w.armorWeight = 0.8f; w.insulationWeight = 1.8f; w.materialWeight = 1.3f; w.qualityWeight = 2.0f;
@@ -187,6 +215,7 @@ namespace Vextex.Settings
                     w.meleeThreshold = 10f; w.rangedThreshold = 8f; w.nonCombatantCeiling = 6f;
                     w.earlyGameDaysThreshold = 40f; w.lateGameWealthThreshold = 120000f;
                     w.tierSWeight = 1.20f; w.tierAWeight = 1.15f; w.tierBWeight = 1.05f; w.tierCWeight = 1.00f; w.tierDWeight = 0.85f;
+                    w.thermalSafetyWeight = 1.2f; w.mobilityWeight = 1.2f; w.prestigeIdeologyWeight = 1.3f; w.hysteresisThreshold = 0.3f; w.threatAware = false; w.preferPrestigeWhenSafe = true;
                     break;
                 case BehaviorPreset.CEHardcore:
                     w.armorWeight = 2.5f; w.insulationWeight = 0.6f; w.materialWeight = 1.4f; w.qualityWeight = 1.6f;
@@ -196,6 +225,16 @@ namespace Vextex.Settings
                     w.earlyGameDaysThreshold = 15f; w.lateGameWealthThreshold = 60000f;
                     w.tierSWeight = 1.40f; w.tierAWeight = 1.25f; w.tierBWeight = 1.00f; w.tierCWeight = 0.85f; w.tierDWeight = 0.70f;
                     w.ceNormalizationFactor = 0f; w.ceSharpNormalization = 15f; w.ceBluntNormalization = 20f; w.ceHeatNormalization = 2f;
+                    w.thermalSafetyWeight = 0.6f; w.mobilityWeight = 0.6f; w.prestigeIdeologyWeight = 0.7f; w.hysteresisThreshold = 0.2f; w.threatAware = true; w.preferPrestigeWhenSafe = false;
+                    break;
+                case BehaviorPreset.SurvivalExtreme:
+                    w.armorWeight = 1.0f; w.insulationWeight = 1.5f; w.materialWeight = 1.0f; w.qualityWeight = 1.2f;
+                    w.movePenaltyWeight = 0.8f; w.aimPenaltyWeight = 1.0f; w.bulkPenaltyWeight = 1.0f;
+                    w.meleeMaterialBias = 1.00f; w.rangedMaterialBias = 1.00f; w.nonCombatantMaterialBias = 1.00f;
+                    w.meleeThreshold = 8f; w.rangedThreshold = 6f; w.nonCombatantCeiling = 5f;
+                    w.earlyGameDaysThreshold = 30f; w.lateGameWealthThreshold = 100000f;
+                    w.tierSWeight = 1.10f; w.tierAWeight = 1.05f; w.tierBWeight = 1.00f; w.tierCWeight = 1.00f; w.tierDWeight = 0.95f;
+                    w.thermalSafetyWeight = 2.0f; w.mobilityWeight = 0.5f; w.prestigeIdeologyWeight = 0.2f; w.hysteresisThreshold = 0.3f; w.threatAware = true; w.preferPrestigeWhenSafe = true;
                     break;
             }
             return w;
@@ -284,6 +323,16 @@ namespace Vextex.Settings
                     tierSWeight = 1.40f; tierAWeight = 1.25f; tierBWeight = 1.00f; tierCWeight = 0.85f; tierDWeight = 0.70f;
                     break;
 
+                case BehaviorPreset.SurvivalExtreme:
+                    armorWeight = 1.0f; insulationWeight = 1.5f; materialWeight = 1.0f; qualityWeight = 1.2f;
+                    movePenaltyWeight = 0.8f; aimPenaltyWeight = 1.0f; bulkPenaltyWeight = 1.0f;
+                    meleeMaterialBias = 1.00f; rangedMaterialBias = 1.00f; nonCombatantMaterialBias = 1.00f;
+                    meleeThreshold = 8f; rangedThreshold = 6f; nonCombatantCeiling = 5f;
+                    earlyGameDaysThreshold = 30f; lateGameWealthThreshold = 100000f;
+                    tierSWeight = 1.10f; tierAWeight = 1.05f; tierBWeight = 1.00f; tierCWeight = 1.00f; tierDWeight = 0.95f;
+                    thermalSafetyWeight = 2.0f; mobilityWeight = 0.5f; prestigeIdeologyWeight = 0.2f; hysteresisThreshold = 0.3f; threatAware = true; preferPrestigeWhenSafe = true;
+                    break;
+
                 case BehaviorPreset.Custom:
                 default:
                     // Custom: don't change any values
@@ -306,6 +355,8 @@ namespace Vextex.Settings
                     return "Prioritizes quality, comfort and insulation. Best for roleplay-focused games.";
                 case BehaviorPreset.CEHardcore:
                     return "Tuned for Combat Extended. Armor is critical, penalties are tolerated.";
+                case BehaviorPreset.SurvivalExtreme:
+                    return "Thermal safety very high, mobility low. Best for extreme cold/heat biomes.";
                 case BehaviorPreset.Custom:
                 default:
                     return "Manual slider configuration. Change any value freely.";
@@ -321,6 +372,7 @@ namespace Vextex.Settings
             Scribe_Values.Look(ref enableRoleDetection, "enableRoleDetection", true);
             Scribe_Values.Look(ref enableMaterialEvaluation, "enableMaterialEvaluation", true);
             Scribe_Values.Look(ref enableVerboseLogging, "enableVerboseLogging", false);
+            Scribe_Values.Look(ref debugLogging, "debugLogging", false);
 
             Scribe_Values.Look(ref externalOutfitController, "externalOutfitController", false);
 
@@ -359,6 +411,13 @@ namespace Vextex.Settings
             Scribe_Collections.Look(ref outfitProfiles, "outfitProfiles", LookMode.Value, LookMode.Value);
             if (outfitProfiles == null)
                 outfitProfiles = new Dictionary<string, BehaviorPreset>();
+
+            Scribe_Values.Look(ref thermalSafetyWeight, "thermalSafetyWeight", 1.0f);
+            Scribe_Values.Look(ref mobilityWeight, "mobilityWeight", 1.0f);
+            Scribe_Values.Look(ref prestigeIdeologyWeight, "prestigeIdeologyWeight", 1.0f);
+            Scribe_Values.Look(ref hysteresisThreshold, "hysteresisThreshold", 0.25f);
+            Scribe_Values.Look(ref threatAware, "threatAware", true);
+            Scribe_Values.Look(ref preferPrestigeWhenSafe, "preferPrestigeWhenSafe", true);
         }
 
         public void DoWindowContents(UnityEngine.Rect inRect)
@@ -402,6 +461,10 @@ namespace Vextex.Settings
             {
                 ApplyPreset(BehaviorPreset.CEHardcore);
             }
+            if (listing.RadioButton("Survival Extreme (thermal priority, low mobility)", currentPreset == BehaviorPreset.SurvivalExtreme))
+            {
+                ApplyPreset(BehaviorPreset.SurvivalExtreme);
+            }
             if (listing.RadioButton("Custom (manual sliders below)", currentPreset == BehaviorPreset.Custom))
             {
                 currentPreset = BehaviorPreset.Custom;
@@ -426,6 +489,8 @@ namespace Vextex.Settings
             listing.GapLine();
             listing.CheckboxLabeled("Enable verbose logging", ref enableVerboseLogging,
                 "Log detailed scoring info to help diagnose mod conflicts. Check Player.log for output.");
+            listing.CheckboxLabeled("Debug logging (DevMode)", ref debugLogging,
+                "Log pawn name, role, score change and main reasons (thermal, armor, etc.). Only when Dev Mode is on.");
 
             listing.GapLine();
 
@@ -515,6 +580,22 @@ namespace Vextex.Settings
             bulkPenaltyWeight = listing.Slider(bulkPenaltyWeight, 0.3f, 2.0f);
 
             listing.GapLine();
+            listing.Label("=== Thermal / Mobility / Prestige ===");
+            listing.GapLine();
+            listing.Label($"Thermal safety weight: {thermalSafetyWeight:F1}");
+            thermalSafetyWeight = listing.Slider(thermalSafetyWeight, 0f, 3f);
+            listing.Label($"Mobility weight: {mobilityWeight:F1}");
+            mobilityWeight = listing.Slider(mobilityWeight, 0f, 3f);
+            listing.Label($"Prestige / Ideology weight: {prestigeIdeologyWeight:F1}");
+            prestigeIdeologyWeight = listing.Slider(prestigeIdeologyWeight, 0f, 3f);
+            listing.Label($"Hysteresis threshold (min % better to swap, 0.25 = 25%): {hysteresisThreshold:F2}");
+            hysteresisThreshold = listing.Slider(hysteresisThreshold, 0.05f, 0.5f);
+            listing.CheckboxLabeled("Threat-aware (increase armor weight when raid/enemies nearby)", ref threatAware,
+                "When enabled, colonists prioritize armor when hostiles are present.");
+            listing.CheckboxLabeled("Prefer prestige apparel when safe (Royalty)", ref preferPrestigeWhenSafe,
+                "When enabled, titled pawns prefer prestige apparel only if it does not compromise protection or thermal safety.");
+
+            listing.GapLine();
 
             // === Material Scaling ===
             listing.Label("=== Material Scaling ===");
@@ -586,7 +667,7 @@ namespace Vextex.Settings
                             if (listing.ButtonText($"Cycle preset for \"{label}\""))
                             {
                                 // Cycle through presets
-                                int next = ((int)current + 1) % 5; // 5 enum values
+                                int next = ((int)current + 1) % 6; // 6 preset values (Custom, VanillaPlus, CombatFocus, ComfortRP, CEHardcore, SurvivalExtreme)
                                 outfitProfiles[label] = (BehaviorPreset)next;
                             }
                         }
