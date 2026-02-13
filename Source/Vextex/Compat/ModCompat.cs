@@ -43,6 +43,18 @@ namespace Vextex.Compat
         /// <summary>Whether Infused/Infused2 is active (modifies apparel stats dynamically).</summary>
         public static bool IsInfusedActive { get; private set; }
 
+        /// <summary>Whether Outfitted (notfood) is active — also patches outfit AI; suggest externalOutfitController.</summary>
+        public static bool IsOutfittedActive { get; private set; }
+
+        /// <summary>Whether Best Apparel is active — also patches outfit AI; suggest externalOutfitController.</summary>
+        public static bool IsBestApparelActive { get; private set; }
+
+        /// <summary>True when a known "outfit controller" mod is active; show suggestion to enable externalOutfitController.</summary>
+        public static bool SuggestExternalOutfitController { get; private set; }
+
+        /// <summary>Other Harmony owners that patch ApparelScoreGain (set at startup). Empty = only Vextex. For UI warning.</summary>
+        public static List<string> OtherApparelScorePatchOwners { get; set; } = new List<string>();
+
         /// <summary>Set of all detected mod names for logging/UI display.</summary>
         public static List<string> DetectedMods { get; private set; } = new List<string>();
 
@@ -77,6 +89,15 @@ namespace Vextex.Compat
                 IsInfusedActive = IsModActive("latta.infused")
                                || IsModActive("latta.infused2");
 
+                // Outfit AI mods (patch same methods; suggest externalOutfitController to avoid conflicts)
+                IsOutfittedActive = IsModActive("notfood.Outfitted");
+                IsBestApparelActive = IsModActive("io.github.Relvl.Rimworld.BestApparel")
+                                  || IsModActive("BestApparel");
+                SuggestExternalOutfitController = IsOutfittedActive || IsBestApparelActive;
+
+                // Resolve optional StatDefs once (for modded stats)
+                OptionalStatsResolver.ResolveAll();
+
                 // Build detected mods list
                 BuildDetectedModsList();
                 LogDetectedMods();
@@ -108,6 +129,8 @@ namespace Vextex.Compat
         /// </summary>
         private static void BuildDetectedModsList()
         {
+            if (DetectedMods == null)
+                DetectedMods = new List<string>();
             DetectedMods.Clear();
 
             if (IsCEActive) DetectedMods.Add("Combat Extended");
@@ -120,6 +143,8 @@ namespace Vextex.Compat
             if (IsRimOfMagicActive) DetectedMods.Add("A Rimworld of Magic");
             if (IsAndroidTiersActive) DetectedMods.Add("Android Tiers");
             if (IsInfusedActive) DetectedMods.Add("Infused");
+            if (IsOutfittedActive) DetectedMods.Add("Outfitted");
+            if (IsBestApparelActive) DetectedMods.Add("Best Apparel");
         }
 
         /// <summary>

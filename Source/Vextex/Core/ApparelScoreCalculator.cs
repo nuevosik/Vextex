@@ -41,15 +41,21 @@ namespace Vextex.Core
             return ((long)pawnId << 32) | (uint)apparelId;
         }
 
+        /// <summary>Cache valid for this many ticks before invalidation (reduces O(N*M) recalc).</summary>
+        private const int CacheValidTicks = 60;
+
         /// <summary>
-        /// Ensures the cache is valid for the current tick. Clears it when the tick changes.
+        /// Ensures the cache is valid. Clears when tick advanced beyond CacheValidTicks or entry count exceeded.
         /// </summary>
         private static void ValidateCache()
         {
             try
             {
                 int tick = Find.TickManager?.TicksGame ?? -1;
-                if (tick != _cacheTick || _scoreCache.Count > MaxCacheEntries)
+                bool invalid = _cacheTick < 0
+                    || (tick - _cacheTick) > CacheValidTicks
+                    || _scoreCache.Count > MaxCacheEntries;
+                if (invalid)
                 {
                     _scoreCache.Clear();
                     _cacheTick = tick;
@@ -94,11 +100,27 @@ namespace Vextex.Core
                 float durabilityFactor = CalculateDurabilityFactor(apparel);
                 float penaltyScore = CalculatePenalties(apparel, roleMult, w);
 
+                // Thermal safety: strong penalty if apparel would push pawn outside comfort (e.g. parka in summer)
+                float thermalPenalty = GetThermalSafetyPenalty(pawn, apparel);
+                penaltyScore += thermalPenalty;
+
+                // Utility slots (Shield Belt, Jump Pack): high value for melee/ranged
+                float utilityScore = GetUtilitySlotScore(apparel, role);
+                // Biotech: toxic resistance priority on polluted maps
+                float toxicScore = GetToxicResistanceScore(pawn, apparel);
+                // Ideology: bonus for apparel that satisfies precepts (avoids -mood)
+                float ideologyBonus = IdeologyCompat.GetApparelPreceptBonus(pawn, apparel);
+                // Royalty: psycasters should keep Eltex/psychic gear (PsychicSensitivity, PsychicEntropyRecoveryRate)
+                float psychicScore = GetPsychicApparelScore(pawn, apparel);
+
                 // Anomaly detection: warn about extreme component values
                 DetectAnomalies(apparel, armorScore, insulationScore, materialScore, penaltyScore);
 
                 float result = ComposeScore(armorScore, insulationScore, materialScore,
-                    qualityScore, durabilityFactor, penaltyScore, pawn, w);
+                    qualityScore, durabilityFactor, penaltyScore, pawn, w,
+                    contributorPawn: pawn, contributorApparel: apparel, role, roleMult, stage);
+
+                result += utilityScore + toxicScore + ideologyBonus + psychicScore;
 
                 _scoreCache[key] = result;
                 return result;
@@ -144,7 +166,7 @@ namespace Vextex.Core
                 earlyGameDaysThreshold = 30f, lateGameWealthThreshold = 100000f,
                 tierSWeight = 1.15f, tierAWeight = 1.10f, tierBWeight = 1.00f, tierCWeight = 1.00f, tierDWeight = 0.90f,
                 enableMaterialEvaluation = true, enableSkillPriority = true, enableRoleDetection = true,
-                ceNormalizationFactor = 0f
+                ceNormalizationFactor = 0f, ceSharpNormalization = 0f, ceBluntNormalization = 0f, ceHeatNormalization = 0f
             };
         }
 
@@ -185,7 +207,8 @@ namespace Vextex.Core
                 ctx.VextexScore = ComposeScore(
                     ctx.ArmorScoreRaw, ctx.InsulationScoreRaw, ctx.MaterialScoreRaw,
                     ctx.QualityScoreRaw, ctx.DurabilityFactor, ctx.PenaltyScoreRaw,
-                    pawn, w);
+                    pawn, w,
+                    contributorPawn: pawn, contributorApparel: candidate, ctx.Role, ctx.RoleMult, stage);
 
                 if (float.IsNaN(ctx.VextexScore) || float.IsInfinity(ctx.VextexScore))
                     return ctx;
@@ -232,28 +255,66 @@ namespace Vextex.Core
         }
 
         /// <summary>
+        /// Weighted sum of the five built-in components (no durability/skill). Used for compositing and contributors.
+        /// </summary>
+        private static float WeightedComponentSum(
+            float armorScore, float insulationScore, float materialScore,
+            float qualityScore, float penaltyScore, ScoringWeights w)
+        {
+            return (SanitizeFloat(armorScore) * w.armorWeight) +
+                   (SanitizeFloat(insulationScore) * w.insulationWeight) +
+                   (SanitizeFloat(materialScore) * w.materialWeight) +
+                   (SanitizeFloat(qualityScore) * w.qualityWeight) +
+                   SanitizeFloat(penaltyScore);
+        }
+
+        /// <summary>
+        /// Sum of all registered contributor scores for this (pawn, apparel) context. 0 if none registered.
+        /// </summary>
+        private static float GetExtraContributorSum(Pawn pawn, Apparel apparel, ScoringWeights w,
+            ColonistRoleDetector.CombatRole role, ColonistRoleDetector.RoleMultipliers roleMult, ColonyStage stage)
+        {
+            var list = ScoreContributorRegistry.GetContributors();
+            if (list == null || list.Count == 0) return 0f;
+            var ctx = new ScoreContributorContext
+            {
+                Pawn = pawn,
+                Apparel = apparel,
+                Weights = w,
+                Role = role,
+                RoleMult = roleMult,
+                Stage = (ColonyStageContributor)stage
+            };
+            float sum = 0f;
+            foreach (var c in list)
+            {
+                try { sum += c.GetScore(ctx); }
+                catch { /* contributor failed, skip */ }
+            }
+            return SanitizeFloat(sum);
+        }
+
+        /// <summary>
         /// Combines individual component scores into the final weighted composite score.
+        /// Includes optional contributor sum when pawn/apparel/role/stage are provided (same call as built-in).
         /// </summary>
         internal static float ComposeScore(
             float armorScore, float insulationScore, float materialScore,
             float qualityScore, float durabilityFactor, float penaltyScore,
-            Pawn pawn, ScoringWeights w)
+            Pawn pawn, ScoringWeights w,
+            Pawn contributorPawn = null, Apparel contributorApparel = null,
+            ColonistRoleDetector.CombatRole? role = null, ColonistRoleDetector.RoleMultipliers? roleMult = null, ColonyStage? stage = null)
         {
-            float compositeScore =
-                (SanitizeFloat(armorScore) * w.armorWeight) +
-                (SanitizeFloat(insulationScore) * w.insulationWeight) +
-                (SanitizeFloat(materialScore) * w.materialWeight) +
-                (SanitizeFloat(qualityScore) * w.qualityWeight) +
-                SanitizeFloat(penaltyScore);
+            float weightedSum = WeightedComponentSum(armorScore, insulationScore, materialScore, qualityScore, penaltyScore, w);
+            if (contributorPawn != null && contributorApparel != null && role.HasValue && roleMult.HasValue && stage.HasValue)
+                weightedSum += GetExtraContributorSum(contributorPawn, contributorApparel, w, role.Value, roleMult.Value, stage.Value);
 
-            compositeScore *= SanitizeFloat(durabilityFactor, 1.0f);
-
+            float compositeScore = weightedSum * SanitizeFloat(durabilityFactor, 1.0f);
             if (w.enableSkillPriority)
             {
                 float skillMultiplier = ColonistRoleDetector.GetSkillPriorityMultiplier(pawn);
                 compositeScore *= SanitizeFloat(skillMultiplier, 1.0f);
             }
-
             return SanitizeFloat(compositeScore);
         }
 
@@ -270,10 +331,12 @@ namespace Vextex.Core
 
                 if (CombatExtendedCompat.IsCEActive)
                 {
-                    float customFactor = w.ceNormalizationFactor;
-                    sharpArmor = CombatExtendedCompat.NormalizeSharp(sharpArmor, customFactor);
-                    bluntArmor = CombatExtendedCompat.NormalizeBlunt(bluntArmor, customFactor);
-                    heatArmor = CombatExtendedCompat.NormalizeHeat(heatArmor, customFactor);
+                    float sharpDiv = CombatExtendedCompat.ResolveSharpDivisor(w.ceNormalizationFactor, w.ceSharpNormalization);
+                    float bluntDiv = CombatExtendedCompat.ResolveBluntDivisor(w.ceNormalizationFactor, w.ceBluntNormalization);
+                    float heatDiv = CombatExtendedCompat.ResolveHeatDivisor(w.ceNormalizationFactor, w.ceHeatNormalization);
+                    sharpArmor = CombatExtendedCompat.NormalizeSharp(sharpArmor, sharpDiv);
+                    bluntArmor = CombatExtendedCompat.NormalizeBlunt(bluntArmor, bluntDiv);
+                    heatArmor = CombatExtendedCompat.NormalizeHeat(heatArmor, heatDiv);
                 }
 
                 float score =
@@ -331,6 +394,169 @@ namespace Vextex.Core
                 // Normalize to reasonable range, clamp to prevent extreme values from modded gear
                 float normalized = score * 0.01f;
                 return Math.Max(-5f, Math.Min(5f, SanitizeFloat(normalized)));
+            }
+            catch
+            {
+                return 0f;
+            }
+        }
+
+        /// <summary>
+        /// Safety check: only penalize when wearing THIS piece would make the pawn thermally UNSAFE
+        /// (effective temp outside comfort zone), not when the piece is "less protected than current".
+        /// So e.g. swapping Parka for Marine Armor in cold is fine if Marine Armor is still safe.
+        /// </summary>
+        private static float GetThermalSafetyPenalty(Pawn pawn, Apparel apparel)
+        {
+            try
+            {
+                if (pawn?.Map?.mapTemperature == null || apparel?.def?.apparel == null)
+                    return 0f;
+                if (OptionalStatsResolver.ComfyTemperatureMax == null || OptionalStatsResolver.ComfyTemperatureMin == null)
+                    return 0f;
+
+                float ambientTemp = pawn.Map.mapTemperature.OutdoorTemp;
+                float comfyMin = GetStatValueSafe(pawn, OptionalStatsResolver.ComfyTemperatureMin);
+                float comfyMax = GetStatValueSafe(pawn, OptionalStatsResolver.ComfyTemperatureMax);
+
+                float heatInsulation = GetStatValueSafe(apparel, StatDefOf.Insulation_Heat);
+                float coldInsulation = GetStatValueSafe(apparel, StatDefOf.Insulation_Cold);
+
+                // Heuristic: effective temp when wearing this piece. Vanilla often uses ~1:1 insulation;
+                // 0.3f avoids over-penalizing marginal swaps. If feedback: "colonist froze with parka in inventory",
+                // consider raising toward 1.0f (see PLANO_COMPATIBILIDADE / temperature).
+                float effectiveTempApprox = ambientTemp + (heatInsulation * 0.3f) + (coldInsulation * 0.3f);
+
+                // Only penalize if the NEW piece would push pawn outside safe zone
+                if (effectiveTempApprox > comfyMax)
+                {
+                    float excess = (effectiveTempApprox - comfyMax) * (heatInsulation * 0.02f);
+                    return -Math.Min(15f, excess);
+                }
+                if (effectiveTempApprox < comfyMin)
+                {
+                    float deficit = (comfyMin - effectiveTempApprox) * 0.5f;
+                    return -Math.Min(15f, deficit);
+                }
+                return 0f;
+            }
+            catch
+            {
+                return 0f;
+            }
+        }
+
+        /// <summary>
+        /// Score for utility slots (Belt layer) using apparel.tags for mod compatibility.
+        /// Vanilla: BeltDefense (shield belt), BeltDefensePop (smokepop); mods use same tags.
+        /// </summary>
+        private static float GetUtilitySlotScore(Apparel apparel, ColonistRoleDetector.CombatRole role)
+        {
+            try
+            {
+                if (apparel?.def?.apparel == null)
+                    return 0f;
+
+                var layers = apparel.def.apparel.layers;
+                bool isBelt = false;
+                if (layers != null)
+                {
+                    for (int i = 0; i < layers.Count; i++)
+                    {
+                        var layer = layers[i];
+                        if (layer != null && (layer.defName == "Belt" || layer.defName == "Utility"))
+                        {
+                            isBelt = true;
+                            break;
+                        }
+                    }
+                }
+                var tags = apparel.def.apparel.tags;
+                bool hasUtilityTag = tags != null && (tags.Contains("BeltDefense") || tags.Contains("BeltDefensePop") || tags.Contains("Utility"));
+                if (!isBelt && !hasUtilityTag)
+                    return 0f;
+
+                if (tags == null) return 0f;
+
+                // BeltDefense: shield belt (vanilla and mods like KryptonianForceField)
+                if (tags.Contains("BeltDefense"))
+                {
+                    if (role == ColonistRoleDetector.CombatRole.Melee)
+                        return 8f;
+                    if (role == ColonistRoleDetector.CombatRole.Ranged)
+                        return 3f;
+                }
+                // BeltDefensePop: smokepop
+                if (tags.Contains("BeltDefensePop"))
+                {
+                    if (role == ColonistRoleDetector.CombatRole.Ranged)
+                        return 4f;
+                    return 2f;
+                }
+                // Fallback: Belt/Utility layer with "Utility" tag (e.g. jump packs)
+                if (tags.Contains("Utility") || tags.Contains("JumpPack") || tags.Contains("Jump_Pack"))
+                {
+                    if (role == ColonistRoleDetector.CombatRole.Ranged)
+                        return 4f;
+                }
+                return 0f;
+            }
+            catch
+            {
+                return 0f;
+            }
+        }
+
+        /// <summary>
+        /// Royalty: if pawn is a psycaster (has psylink), add score for apparel that gives
+        /// PsychicSensitivity or PsychicEntropyRecoveryRate (e.g. Eltex robe) so they don't swap to plain leather.
+        /// </summary>
+        internal static float GetPsychicApparelScore(Pawn pawn, Apparel apparel)
+        {
+            try
+            {
+                if (pawn == null || apparel?.def?.equippedStatOffsets == null)
+                    return 0f;
+                if (!RoyaltyCompat.HasPsylink(pawn))
+                    return 0f;
+
+                float score = 0f;
+                if (OptionalStatsResolver.PsychicSensitivity != null)
+                {
+                    float sens = GetEquippedStatOffset(apparel, OptionalStatsResolver.PsychicSensitivity);
+                    if (sens > 0f)
+                        score += sens * 2f; // e.g. +20% sensitivity -> +0.4 * 2 = meaningful bonus
+                }
+                if (OptionalStatsResolver.PsychicEntropyRecoveryRate != null)
+                {
+                    float recovery = GetEquippedStatOffset(apparel, OptionalStatsResolver.PsychicEntropyRecoveryRate);
+                    if (recovery > 0f)
+                        score += recovery * 15f; // typical +0.033 -> ~0.5 bonus
+                }
+                return SanitizeFloat(score);
+            }
+            catch
+            {
+                return 0f;
+            }
+        }
+
+        /// <summary>
+        /// On polluted maps (Biotech), prioritize apparel with toxic resistance.
+        /// </summary>
+        private static float GetToxicResistanceScore(Pawn pawn, Apparel apparel)
+        {
+            try
+            {
+                if (pawn?.Map == null || OptionalStatsResolver.ToxicResistance == null)
+                    return 0f;
+                float pollution = BiotechCompat.GetMapPollutionLevel(pawn.Map);
+                if (pollution <= 0f)
+                    return 0f;
+                float toxic = GetStatValueSafe(apparel, OptionalStatsResolver.ToxicResistance);
+                if (toxic <= 0f)
+                    return 0f;
+                return toxic * 0.5f; // scale so it matters but doesn't dwarf armor
             }
             catch
             {
@@ -483,29 +709,20 @@ namespace Vextex.Core
                     }
                 }
 
-                // Check for shooting accuracy and aiming time penalties
+                // Check for shooting accuracy and aiming time penalties (use cached optional stats)
                 if (roleMult.aimPenalty != 0f)
                 {
-                    // Check for ShootingAccuracyPawn offset if it exists
-                    StatDef shootingAccuracy = DefDatabase<StatDef>.GetNamedSilentFail("ShootingAccuracyPawn");
-                    if (shootingAccuracy != null)
+                    if (OptionalStatsResolver.ShootingAccuracyPawn != null)
                     {
-                        float aimOffset = GetEquippedStatOffset(apparel, shootingAccuracy);
+                        float aimOffset = GetEquippedStatOffset(apparel, OptionalStatsResolver.ShootingAccuracyPawn);
                         if (aimOffset < 0f)
-                        {
                             score += aimOffset * roleMult.aimPenalty * aimPenaltyW;
-                        }
                     }
-
-                    // Also check AimingDelayFactor - higher values are worse for ranged
-                    StatDef aimingDelay = DefDatabase<StatDef>.GetNamedSilentFail("AimingDelayFactor");
-                    if (aimingDelay != null)
+                    if (OptionalStatsResolver.AimingDelayFactor != null)
                     {
-                        float delayFactor = GetEquippedStatOffset(apparel, aimingDelay);
+                        float delayFactor = GetEquippedStatOffset(apparel, OptionalStatsResolver.AimingDelayFactor);
                         if (delayFactor > 0f)
-                        {
                             score += delayFactor * roleMult.aimPenalty * 0.5f * aimPenaltyW;
-                        }
                     }
                 }
 
@@ -575,7 +792,7 @@ namespace Vextex.Core
         }
 
         /// <summary>
-        /// Gets the average outdoor temperature for the pawn's current map biome.
+        /// Gets the current outdoor temperature for the pawn's map (used to weight insulation scoring).
         /// </summary>
         private static float GetBiomeAverageTemperature(Pawn pawn)
         {
@@ -663,6 +880,92 @@ namespace Vextex.Core
             if (float.IsNaN(value) || float.IsInfinity(value))
                 return fallback;
             return value;
+        }
+
+        /// <summary>
+        /// Fills swap-evaluation fields of a decision context (worn score, net gain, threshold).
+        /// Used by the optimize-apparel patch and by debug tools.
+        /// </summary>
+        public static void ComputeSwapFields(ApparelDecisionContext ctx, Pawn pawn, Apparel ap)
+        {
+            if (ctx == null || pawn == null || ap?.def == null) return;
+            float removedWornScore = 0f;
+            float currentTotalScore = 0f;
+            bool isNaked = true;
+            List<Apparel> wornApparel = pawn.apparel?.WornApparel;
+            if (wornApparel != null)
+            {
+                for (int i = 0; i < wornApparel.Count; i++)
+                {
+                    Apparel wornItem = wornApparel[i];
+                    if (wornItem == null || wornItem.def == null) continue;
+                    float wornScore = CalculateScore(pawn, wornItem);
+                    if (!float.IsNaN(wornScore) && !float.IsInfinity(wornScore))
+                        currentTotalScore += wornScore;
+                    if (HasApparelConflict(wornItem.def, ap.def))
+                    {
+                        if (pawn.outfits?.forcedHandler != null)
+                        {
+                            try
+                            {
+                                if (pawn.outfits.forcedHandler.IsForced(wornItem))
+                                {
+                                    ctx.NetGain = -1000f;
+                                    ctx.SwapThreshold = 0f;
+                                    ctx.IsValid = false;
+                                    return;
+                                }
+                            }
+                            catch { }
+                        }
+                        if (!float.IsNaN(wornScore) && !float.IsInfinity(wornScore))
+                            removedWornScore += wornScore;
+                    }
+                    if (isNaked && ap.def.apparel?.bodyPartGroups != null && wornItem.def?.apparel?.bodyPartGroups != null)
+                    {
+                        for (int g = 0; g < ap.def.apparel.bodyPartGroups.Count && isNaked; g++)
+                        {
+                            if (wornItem.def.apparel.bodyPartGroups.Contains(ap.def.apparel.bodyPartGroups[g]))
+                                isNaked = false;
+                        }
+                    }
+                }
+            }
+            ctx.RemovedWornScore = removedWornScore;
+            ctx.CurrentTotalScore = currentTotalScore;
+            ctx.NetGain = ctx.VextexScore - removedWornScore;
+            ctx.IsNakedOnCoveredGroups = isNaked;
+            float swapThreshold = currentTotalScore * 0.05f;
+            if (swapThreshold < 0.10f) swapThreshold = 0.10f;
+            if (isNaked) swapThreshold *= 0.5f;
+            if (ctx.PowerPercentile >= 0.75f) swapThreshold *= 0.7f;
+            else if (ctx.PowerPercentile < 0.25f) swapThreshold *= 1.2f;
+            ctx.SwapThreshold = swapThreshold;
+        }
+
+        /// <summary>
+        /// True if two apparel defs conflict (same layer + overlapping body part group).
+        /// </summary>
+        public static bool HasApparelConflict(ThingDef a, ThingDef b)
+        {
+            try
+            {
+                if (a?.apparel == null || b?.apparel == null) return false;
+                var layersA = a.apparel.layers;
+                var layersB = b.apparel.layers;
+                var groupsA = a.apparel.bodyPartGroups;
+                var groupsB = b.apparel.bodyPartGroups;
+                if (layersA == null || layersB == null || groupsA == null || groupsB == null) return false;
+                for (int la = 0; la < layersA.Count; la++)
+                    for (int lb = 0; lb < layersB.Count; lb++)
+                        if (layersA[la] == layersB[lb])
+                            for (int ga = 0; ga < groupsA.Count; ga++)
+                                for (int gb = 0; gb < groupsB.Count; gb++)
+                                    if (groupsA[ga] == groupsB[gb])
+                                        return true;
+            }
+            catch { }
+            return false;
         }
     }
 }

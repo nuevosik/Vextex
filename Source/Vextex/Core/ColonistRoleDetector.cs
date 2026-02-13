@@ -282,9 +282,44 @@ namespace Vextex.Core
             }
         }
 
+        // ====================================================================
+        // Scalability: per-tick, per-map cache for power level and percentile
+        // so we don't recompute for every apparel candidate (O(colonists) per call).
+        // ====================================================================
+        private static int _powerCacheTick = -1;
+        private static int _powerCacheMapId = -1;
+        private static readonly Dictionary<int, float> _cachedPowerLevels = new Dictionary<int, float>(64);
+
+        /// <summary>
+        /// Ensures the power cache is valid for the current tick and map; rebuilds if needed.
+        /// </summary>
+        private static void EnsurePowerCacheForMap(Map map)
+        {
+            if (map == null) return;
+            int tick = Find.TickManager?.TicksGame ?? -1;
+            int mapId = map.uniqueID;
+            if (tick == _powerCacheTick && mapId == _powerCacheMapId && _cachedPowerLevels.Count > 0)
+                return;
+            _powerCacheTick = tick;
+            _powerCacheMapId = mapId;
+            _cachedPowerLevels.Clear();
+            try
+            {
+                foreach (Pawn p in map.mapPawns.FreeColonists)
+                {
+                    if (p != null && !p.Dead)
+                        _cachedPowerLevels[p.thingIDNumber] = CalculatePowerLevel(p);
+                }
+            }
+            catch
+            {
+                _cachedPowerLevels.Clear();
+            }
+        }
+
         /// <summary>
         /// Calculates the pawn's power percentile (0.0–1.0) among all free colonists on the same map.
-        /// 1.0 = strongest, 0.0 = weakest.  Returns 0.5 on any error.
+        /// 1.0 = strongest, 0.0 = weakest. Uses per-tick per-map cache for scalability.
         /// </summary>
         public static float GetPowerPercentile(Pawn pawn)
         {
@@ -293,33 +328,19 @@ namespace Vextex.Core
                 if (pawn?.Map == null)
                     return 0.5f;
 
-                var colonists = new List<Pawn>();
-                try
-                {
-                    foreach (Pawn p in pawn.Map.mapPawns.FreeColonists)
-                    {
-                        if (p != null && !p.Dead)
-                            colonists.Add(p);
-                    }
-                }
-                catch
-                {
-                    return 0.5f;
-                }
-
-                if (colonists.Count <= 1)
+                EnsurePowerCacheForMap(pawn.Map);
+                if (_cachedPowerLevels.Count <= 1)
                     return 1.0f;
-
-                float myPower = CalculatePowerLevel(pawn);
+                if (!_cachedPowerLevels.TryGetValue(pawn.thingIDNumber, out float myPower))
+                    return 0.5f;
 
                 int betterThanMe = 0;
-                foreach (Pawn other in colonists)
+                foreach (float otherPower in _cachedPowerLevels.Values)
                 {
-                    if (other != pawn && CalculatePowerLevel(other) > myPower)
+                    if (otherPower > myPower)
                         betterThanMe++;
                 }
-
-                return 1f - ((float)betterThanMe / colonists.Count);
+                return 1f - ((float)betterThanMe / _cachedPowerLevels.Count);
             }
             catch
             {

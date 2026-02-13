@@ -11,6 +11,55 @@ namespace Vextex.Patches
     [HarmonyPatch(typeof(JobGiver_OptimizeApparel), "ApparelScoreGain")]
     public static class Patch_ApparelScoreGain
     {
+        /// <summary>Hysteresis factor: net gain must exceed threshold by this ratio to recommend a swap.</summary>
+        private const float SwapHysteresisFactor = 1.25f;
+
+        /// <summary>Minimum absolute net gain required to recommend a swap. Prevents infinite equip/unequip
+        /// when two items have nearly identical scores and the relative threshold fluctuates with current outfit.</summary>
+        private const float MinAbsoluteNetGain = 0.18f;
+
+        /// <summary>After recommending a swap for a pawn, ignore further recommendations for this pawn for this many ticks.
+        /// Must be longer than the time to complete an optimize-apparel job (walk to item + equip), otherwise the pawn
+        /// can get a new swap recommendation before finishing, causing infinite equip/unequip loops.</summary>
+        private const int SwapCooldownTicks = 600; // ~10 seconds at 1x speed
+
+        private static int _cooldownCacheTick = -1;
+        private static readonly Dictionary<int, int> _lastRecommendTickByPawn = new Dictionary<int, int>(32);
+
+        /// <summary>Returns true if this pawn is still in cooldown after a recent swap recommendation.</summary>
+        private static bool IsInCooldown(Pawn pawn)
+        {
+            if (pawn == null) return false;
+            int tick = Find.TickManager?.TicksGame ?? 0;
+            PruneCooldownCache(tick);
+            if (!_lastRecommendTickByPawn.TryGetValue(pawn.thingIDNumber, out int lastTick))
+                return false;
+            return (tick - lastTick) < SwapCooldownTicks;
+        }
+
+        /// <summary>Remove cooldown entries that have expired to avoid unbounded growth.</summary>
+        private static void PruneCooldownCache(int currentTick)
+        {
+            if (currentTick == _cooldownCacheTick) return;
+            _cooldownCacheTick = currentTick;
+            var toRemove = new List<int>();
+            foreach (var kv in _lastRecommendTickByPawn)
+            {
+                if ((currentTick - kv.Value) >= SwapCooldownTicks)
+                    toRemove.Add(kv.Key);
+            }
+            foreach (int key in toRemove)
+                _lastRecommendTickByPawn.Remove(key);
+        }
+
+        /// <summary>Marks that we recommended a swap for this pawn this tick.</summary>
+        private static void SetCooldown(Pawn pawn)
+        {
+            if (pawn == null) return;
+            int tick = Find.TickManager?.TicksGame ?? 0;
+            _lastRecommendTickByPawn[pawn.thingIDNumber] = tick;
+        }
+
         // Run this postfix after most other patches so we can cooperate instead of fight
         [HarmonyPostfix]
         [HarmonyPriority(Priority.Last)]
@@ -18,11 +67,9 @@ namespace Vextex.Patches
         {
             try
             {
-                // === Read settings & compatibility mode ===
+                // === Read settings: when another mod controls outfit AI, do not touch __result (100% vanilla behavior) ===
                 VextexSettings settings = VextexModHandler.Settings;
-                OutfitAIMode mode = settings?.outfitMode ?? OutfitAIMode.Aggressive;
-
-                if (settings?.externalOutfitController == true || mode == OutfitAIMode.Passive)
+                if (settings?.externalOutfitController == true)
                     return;
 
                 // === Safety guards ===
@@ -32,6 +79,12 @@ namespace Vextex.Patches
                     return;
                 if (__result < -999f)
                     return;
+                // Never recommend swapping to something the pawn is already wearing (avoids loops from other mods or edge cases)
+                if (pawn.apparel?.WornApparel != null && pawn.apparel.WornApparel.Contains(ap))
+                {
+                    __result = -1f;
+                    return;
+                }
 
                 // === Build decision context ===
                 ApparelDecisionContext ctx = ApparelScoreCalculator.BuildDecisionContext(pawn, ap);
@@ -39,7 +92,9 @@ namespace Vextex.Patches
                     return;
 
                 // === Compute swap evaluation fields ===
-                ComputeSwapFields(ctx, pawn, ap, settings);
+                ApparelScoreCalculator.ComputeSwapFields(ctx, pawn, ap);
+                if (!ctx.IsValid)
+                    return;
 
                 // === Verbose logging ===
                 if (settings != null && settings.enableVerboseLogging && Prefs.DevMode)
@@ -52,22 +107,20 @@ namespace Vextex.Patches
                                 $"Naked={ctx.IsNakedOnCoveredGroups}, PwrPct={ctx.PowerPercentile:F2}");
                 }
 
-                // === Apply according to selected mode ===
-                if (mode == OutfitAIMode.Cooperative)
-                {
-                    if (ctx.NetGain <= 0f || ctx.NetGain <= ctx.SwapThreshold)
-                        return;
+                // === Single behavior: recommend swap only when gain is clear and not in cooldown ===
+                float effectiveThreshold = ctx.SwapThreshold * SwapHysteresisFactor;
+                bool recommendSwap = ctx.NetGain > 0f
+                    && ctx.NetGain >= effectiveThreshold
+                    && ctx.NetGain >= MinAbsoluteNetGain
+                    && !IsInCooldown(pawn);
 
-                    float blendWeight = 0.5f;
-                    __result = __result + (ctx.NetGain - __result) * blendWeight;
+                if (recommendSwap)
+                {
+                    SetCooldown(pawn);
+                    __result = ctx.NetGain;
                 }
                 else
-                {
-                    if (ctx.NetGain > ctx.SwapThreshold)
-                        __result = ctx.NetGain;
-                    else
-                        __result = -1f;
-                }
+                    __result = -1f;
             }
             catch (Exception ex)
             {
@@ -77,145 +130,9 @@ namespace Vextex.Patches
         }
 
         /// <summary>
-        /// Fills the swap-evaluation fields of a decision context (worn score, net gain,
-        /// threshold, naked-check).  Separated so the patch body stays clean.
+        /// Conflict check delegated to ApparelScoreCalculator for reuse by debug tools.
         /// </summary>
-        private static void ComputeSwapFields(ApparelDecisionContext ctx, Pawn pawn, Apparel ap, VextexSettings settings)
-        {
-            float removedWornScore = 0f;
-            float currentTotalScore = 0f;
-            bool isNaked = true;
-
-            List<Apparel> wornApparel = pawn.apparel?.WornApparel;
-            if (wornApparel != null)
-            {
-                for (int i = 0; i < wornApparel.Count; i++)
-                {
-                    Apparel wornItem = wornApparel[i];
-                    if (wornItem == null || wornItem.def == null)
-                        continue;
-
-                    // Track total current score
-                    float wornScore = ApparelScoreCalculator.CalculateScore(pawn, wornItem);
-                    if (!float.IsNaN(wornScore) && !float.IsInfinity(wornScore))
-                        currentTotalScore += wornScore;
-
-                    // Check conflict
-                    if (HasApparelConflict(wornItem.def, ap.def))
-                    {
-                        // Forced check
-                        if (pawn.outfits?.forcedHandler != null)
-                        {
-                            try
-                            {
-                                if (pawn.outfits.forcedHandler.IsForced(wornItem))
-                                {
-                                    ctx.NetGain = -1000f;
-                                    ctx.SwapThreshold = 0f;
-                                    ctx.IsValid = false;
-                                    return;
-                                }
-                            }
-                            catch { }
-                        }
-
-                        if (!float.IsNaN(wornScore) && !float.IsInfinity(wornScore))
-                            removedWornScore += wornScore;
-                    }
-
-                    // Check if pawn already covers candidate body groups
-                    if (isNaked)
-                    {
-                        try
-                        {
-                            var candidateGroups = ap.def.apparel.bodyPartGroups;
-                            var wornGroups = wornItem.def?.apparel?.bodyPartGroups;
-                            if (candidateGroups != null && wornGroups != null)
-                            {
-                                for (int g = 0; g < candidateGroups.Count && isNaked; g++)
-                                {
-                                    if (wornGroups.Contains(candidateGroups[g]))
-                                        isNaked = false;
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                }
-            }
-
-            ctx.RemovedWornScore = removedWornScore;
-            ctx.CurrentTotalScore = currentTotalScore;
-            ctx.NetGain = ctx.VextexScore - removedWornScore;
-            ctx.IsNakedOnCoveredGroups = isNaked;
-
-            // Base threshold: 5% of current total, min 0.05
-            float swapThreshold = currentTotalScore * 0.05f;
-            if (swapThreshold < 0.05f)
-                swapThreshold = 0.05f;
-
-            // Naked on covered groups → halve threshold
-            if (isNaked)
-                swapThreshold *= 0.5f;
-
-            // Power-level scaling: top 25% get easier threshold, bottom 25% get stricter
-            if (ctx.PowerPercentile >= 0.75f)
-                swapThreshold *= 0.7f;
-            else if (ctx.PowerPercentile < 0.25f)
-                swapThreshold *= 1.2f;
-
-            ctx.SwapThreshold = swapThreshold;
-        }
-
-        /// <summary>
-        /// Checks if two apparel defs conflict (cannot be worn together).
-        /// Two apparel items conflict if they share the same apparel layer AND
-        /// overlap on at least one body part group.
-        /// </summary>
-        private static bool HasApparelConflict(ThingDef a, ThingDef b)
-        {
-            try
-            {
-                if (a?.apparel == null || b?.apparel == null)
-                    return false;
-
-                var layersA = a.apparel.layers;
-                var layersB = b.apparel.layers;
-                var groupsA = a.apparel.bodyPartGroups;
-                var groupsB = b.apparel.bodyPartGroups;
-
-                if (layersA == null || layersB == null || groupsA == null || groupsB == null)
-                    return false;
-
-                // Check for shared layers
-                for (int la = 0; la < layersA.Count; la++)
-                {
-                    for (int lb = 0; lb < layersB.Count; lb++)
-                    {
-                        if (layersA[la] == layersB[lb])
-                        {
-                            // Shared layer found - check for body part group overlap
-                            for (int ga = 0; ga < groupsA.Count; ga++)
-                            {
-                                for (int gb = 0; gb < groupsB.Count; gb++)
-                                {
-                                    if (groupsA[ga] == groupsB[gb])
-                                    {
-                                        return true; // Conflict: same layer + same body part
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                // If we can't determine conflict, assume no conflict (safe default)
-            }
-
-            return false;
-        }
+        private static bool HasApparelConflict(ThingDef a, ThingDef b) => ApparelScoreCalculator.HasApparelConflict(a, b);
     }
 
     /// <summary>

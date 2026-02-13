@@ -7,21 +7,6 @@ using Vextex.Compat;
 namespace Vextex.Settings
 {
     /// <summary>
-    /// How aggressively Vextex should override or cooperate with other outfit logic.
-    /// </summary>
-    public enum OutfitAIMode
-    {
-        /// <summary>Vextex fully controls apparel scoring when safe to do so.</summary>
-        Aggressive,
-
-        /// <summary>Vextex blends its score with existing results from vanilla/other mods.</summary>
-        Cooperative,
-
-        /// <summary>Vextex does not touch outfit logic at all (maximum compatibility).</summary>
-        Passive
-    }
-
-    /// <summary>
     /// Quick-start presets that configure all sliders to sensible values for a given playstyle.
     /// </summary>
     public enum BehaviorPreset
@@ -55,7 +40,14 @@ namespace Vextex.Settings
         public float earlyGameDaysThreshold, lateGameWealthThreshold;
         public float tierSWeight, tierAWeight, tierBWeight, tierCWeight, tierDWeight;
         public bool enableMaterialEvaluation, enableSkillPriority, enableRoleDetection;
+        /// <summary>Global override: when &gt; 0, used as divisor for Sharp, Blunt and Heat. 0 = use per-stat or defaults.</summary>
         public float ceNormalizationFactor;
+        /// <summary>CE Sharp armor divisor. 0 = use default (DefaultSharpNormalization).</summary>
+        public float ceSharpNormalization;
+        /// <summary>CE Blunt armor divisor. 0 = use default.</summary>
+        public float ceBluntNormalization;
+        /// <summary>CE Heat armor divisor. 0 = use default.</summary>
+        public float ceHeatNormalization;
     }
 
     /// <summary>
@@ -74,12 +66,8 @@ namespace Vextex.Settings
         // Diagnostics
         public bool enableVerboseLogging = false;
 
-        // Compatibility / behavior mode
-        public OutfitAIMode outfitMode = OutfitAIMode.Aggressive;
-
         /// <summary>
-        /// When true, Vextex will assume another mod fully controls outfit AI
-        /// and will never touch the optimize apparel logic (behaves like Passive mode).
+        /// When true, Vextex will not touch the optimize apparel logic (another mod controls it).
         /// </summary>
         public bool externalOutfitController = false;
 
@@ -95,7 +83,10 @@ namespace Vextex.Settings
         public float nonCombatantCeiling = 5f;
 
         // Combat Extended compatibility
-        public float ceNormalizationFactor = 0f; // 0 = use defaults
+        public float ceNormalizationFactor = 0f; // when > 0, overrides all three below
+        public float ceSharpNormalization = 0f;  // 0 = use CE compat default
+        public float ceBluntNormalization = 0f;
+        public float ceHeatNormalization = 0f;
 
         // Colony / material scaling
         public float earlyGameDaysThreshold = 30f;
@@ -153,7 +144,10 @@ namespace Vextex.Settings
                 enableMaterialEvaluation = enableMaterialEvaluation,
                 enableSkillPriority = enableSkillPriority,
                 enableRoleDetection = enableRoleDetection,
-                ceNormalizationFactor = ceNormalizationFactor
+                ceNormalizationFactor = ceNormalizationFactor,
+                ceSharpNormalization = ceSharpNormalization,
+                ceBluntNormalization = ceBluntNormalization,
+                ceHeatNormalization = ceHeatNormalization
             };
         }
 
@@ -201,6 +195,7 @@ namespace Vextex.Settings
                     w.meleeThreshold = 5f; w.rangedThreshold = 4f; w.nonCombatantCeiling = 2f;
                     w.earlyGameDaysThreshold = 15f; w.lateGameWealthThreshold = 60000f;
                     w.tierSWeight = 1.40f; w.tierAWeight = 1.25f; w.tierBWeight = 1.00f; w.tierCWeight = 0.85f; w.tierDWeight = 0.70f;
+                    w.ceNormalizationFactor = 0f; w.ceSharpNormalization = 15f; w.ceBluntNormalization = 20f; w.ceHeatNormalization = 2f;
                     break;
             }
             return w;
@@ -211,6 +206,8 @@ namespace Vextex.Settings
         /// </summary>
         public ScoringWeights ResolveWeightsForPawn(Pawn pawn)
         {
+            if (pawn == null)
+                return ToWeights();
             BehaviorPreset preset = GetEffectivePreset(pawn);
             if (preset == BehaviorPreset.Custom || preset == currentPreset)
                 return ToWeights();
@@ -226,10 +223,12 @@ namespace Vextex.Settings
         {
             try
             {
+                if (pawn == null)
+                    return currentPreset;
                 if (!enablePerOutfitProfiles || outfitProfiles == null || outfitProfiles.Count == 0)
                     return currentPreset;
 
-                if (pawn?.outfits?.CurrentApparelPolicy == null)
+                if (pawn.outfits?.CurrentApparelPolicy == null)
                     return currentPreset;
 
                 string label = pawn.outfits.CurrentApparelPolicy.label;
@@ -323,7 +322,6 @@ namespace Vextex.Settings
             Scribe_Values.Look(ref enableMaterialEvaluation, "enableMaterialEvaluation", true);
             Scribe_Values.Look(ref enableVerboseLogging, "enableVerboseLogging", false);
 
-            Scribe_Values.Look(ref outfitMode, "outfitMode", OutfitAIMode.Aggressive);
             Scribe_Values.Look(ref externalOutfitController, "externalOutfitController", false);
 
             Scribe_Values.Look(ref armorWeight, "armorWeight", 1.5f);
@@ -336,6 +334,9 @@ namespace Vextex.Settings
             Scribe_Values.Look(ref nonCombatantCeiling, "nonCombatantCeiling", 5f);
 
             Scribe_Values.Look(ref ceNormalizationFactor, "ceNormalizationFactor", 0f);
+            Scribe_Values.Look(ref ceSharpNormalization, "ceSharpNormalization", 0f);
+            Scribe_Values.Look(ref ceBluntNormalization, "ceBluntNormalization", 0f);
+            Scribe_Values.Look(ref ceHeatNormalization, "ceHeatNormalization", 0f);
 
             Scribe_Values.Look(ref earlyGameDaysThreshold, "earlyGameDaysThreshold", 30f);
             Scribe_Values.Look(ref lateGameWealthThreshold, "lateGameWealthThreshold", 100000f);
@@ -362,12 +363,15 @@ namespace Vextex.Settings
 
         public void DoWindowContents(UnityEngine.Rect inRect)
         {
+            if (outfitProfiles == null)
+                outfitProfiles = new Dictionary<string, BehaviorPreset>();
+
             Listing_Standard listing = new Listing_Standard();
             listing.Begin(inRect);
 
             // === Detected Mods Status ===
             listing.Label($"Vextex v{VextexMod.VERSION}");
-            if (ModCompat.DetectedMods.Count > 0)
+            if (ModCompat.DetectedMods != null && ModCompat.DetectedMods.Count > 0)
             {
                 listing.Label($"Compatible mods detected: {string.Join(", ", ModCompat.DetectedMods)}");
             }
@@ -425,30 +429,21 @@ namespace Vextex.Settings
 
             listing.GapLine();
 
-            // === Outfit AI Mode / Compatibility ===
-            listing.Label("=== Outfit AI Mode ===");
+            // === Compatibility ===
+            listing.Label("=== Compatibility ===");
             listing.GapLine();
-
-            listing.Label("Choose how aggressively Vextex should override other outfit logic.");
-
-            if (listing.RadioButton("Aggressive (Vextex controls apparel scoring)", outfitMode == OutfitAIMode.Aggressive))
+            if (ModCompat.OtherApparelScorePatchOwners != null && ModCompat.OtherApparelScorePatchOwners.Count > 0)
             {
-                outfitMode = OutfitAIMode.Aggressive;
+                listing.Label("Warning: Other mod(s) also patch outfit AI: " + string.Join(", ", ModCompat.OtherApparelScorePatchOwners) + ". If you see conflicts (e.g. infinite equip/unequip), enable the option below.");
+                listing.Gap(4f);
             }
-
-            if (listing.RadioButton("Cooperative (blend with existing logic)", outfitMode == OutfitAIMode.Cooperative))
+            if (ModCompat.SuggestExternalOutfitController)
             {
-                outfitMode = OutfitAIMode.Cooperative;
+                listing.Label("Outfitted or Best Apparel detected. To avoid conflicts, enable 'Another mod fully controls outfit AI' if you prefer their outfit logic.");
+                listing.Gap(4f);
             }
-
-            if (listing.RadioButton("Passive (do not touch outfit AI)", outfitMode == OutfitAIMode.Passive))
-            {
-                outfitMode = OutfitAIMode.Passive;
-            }
-
             listing.CheckboxLabeled("Another mod fully controls outfit AI", ref externalOutfitController,
-                "When enabled, Vextex will never modify optimize apparel behavior, regardless of the selected mode.");
-
+                "When enabled, Vextex will not modify optimize apparel behavior. Use this if you use another mod for outfit/armor AI.");
             listing.GapLine();
 
             // === Weight Sliders ===
@@ -488,10 +483,20 @@ namespace Vextex.Settings
                 listing.GapLine();
                 listing.Label("=== Combat Extended ===");
                 listing.GapLine();
+                listing.Label("Armor normalization: CE uses RHA/MPa scales. Dividers convert to 0–1 for scoring. 0 = use Vextex defaults (15 Sharp, 20 Blunt, 2 Heat).");
 
-                listing.Label($"Armor normalization factor: {(ceNormalizationFactor > 0f ? ceNormalizationFactor.ToString("F1") : "Auto")}");
-                ceNormalizationFactor = listing.Slider(ceNormalizationFactor, 0f, 30f);
-                listing.Label("(0 = automatic, higher = treats armor as less important)");
+                listing.Label($"Global override (one value for all): {(ceNormalizationFactor > 0f ? ceNormalizationFactor.ToString("F1") : "Off")}");
+                ceNormalizationFactor = listing.Slider(ceNormalizationFactor, 0f, 40f);
+                listing.Label("(0 = use per-stat values below; >0 = same divisor for Sharp/Blunt/Heat)");
+
+                listing.Label($"Sharp (RHA) divisor: {(ceSharpNormalization > 0f ? ceSharpNormalization.ToString("F1") : "Default (15)")}");
+                ceSharpNormalization = listing.Slider(ceSharpNormalization, 0f, 40f);
+
+                listing.Label($"Blunt (MPa) divisor: {(ceBluntNormalization > 0f ? ceBluntNormalization.ToString("F1") : "Default (20)")}");
+                ceBluntNormalization = listing.Slider(ceBluntNormalization, 0f, 50f);
+
+                listing.Label($"Heat divisor: {(ceHeatNormalization > 0f ? ceHeatNormalization.ToString("F1") : "Default (2)")}");
+                ceHeatNormalization = listing.Slider(ceHeatNormalization, 0f, 10f);
             }
 
             listing.GapLine();

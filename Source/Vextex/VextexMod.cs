@@ -13,10 +13,14 @@ namespace Vextex
     /// Initializes mod detection and Harmony patches on game startup.
     /// All initialization is wrapped in safety guards to prevent crashes.
     /// </summary>
+    /// <summary>
+    /// Startup runs in StaticConstructorOnStartup (single run, minimal work: mod detection,
+    /// optional StatDef resolution, Harmony patches). No LongEvent needed for current scope.
+    /// </summary>
     [StaticConstructorOnStartup]
     public static class VextexMod
     {
-        public const string VERSION = "1.2.0";
+        public const string VERSION = "1.0.0";
 
         static VextexMod()
         {
@@ -24,7 +28,7 @@ namespace Vextex
 
             try
             {
-                // Detect all known mods before applying patches
+                // Detect known mods and resolve optional StatDefs once (fast; no UI block)
                 ModCompat.DetectAll();
             }
             catch (Exception ex)
@@ -38,33 +42,26 @@ namespace Vextex
                 harmony.PatchAll(Assembly.GetExecutingAssembly());
                 Log.Message("[Vextex] All Harmony patches applied successfully.");
 
-                // Optional diagnostics: in dev mode, log if other mods also patch optimize apparel.
+                // Detect other mods that patch ApparelScoreGain (for UI warning and compatibility)
                 try
                 {
-                    if (Prefs.DevMode)
+                    var method = AccessTools.Method(typeof(JobGiver_OptimizeApparel), "ApparelScoreGain");
+                    if (method != null && ModCompat.OtherApparelScorePatchOwners != null)
                     {
-                        var method = AccessTools.Method(typeof(JobGiver_OptimizeApparel), "ApparelScoreGain");
-                        if (method != null)
+                        ModCompat.OtherApparelScorePatchOwners.Clear();
+                        var patchInfo = Harmony.GetPatchInfo(method);
+                        if (patchInfo?.Owners != null)
                         {
-                            var patchInfo = Harmony.GetPatchInfo(method);
-                            if (patchInfo != null && patchInfo.Owners != null)
+                            foreach (string owner in patchInfo.Owners)
                             {
-                                // If there are other owners besides Vextex, inform the player once.
-                                var otherOwners = new System.Collections.Generic.List<string>();
-                                foreach (string owner in patchInfo.Owners)
-                                {
-                                    if (!string.Equals(owner, "com.vextex.smartoutfit", StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        otherOwners.Add(owner);
-                                    }
-                                }
-
-                                if (otherOwners.Count > 0)
-                                {
-                                    Log.Message("[Vextex] Other mods are also patching JobGiver_OptimizeApparel.ApparelScoreGain: " +
-                                                string.Join(", ", otherOwners) +
-                                                ". If you experience outfit conflicts, consider using Cooperative or Passive mode in Vextex settings.");
-                                }
+                                if (!string.Equals(owner, "com.vextex.smartoutfit", StringComparison.OrdinalIgnoreCase))
+                                    ModCompat.OtherApparelScorePatchOwners.Add(owner);
+                            }
+                            if (ModCompat.OtherApparelScorePatchOwners.Count > 0 && Prefs.DevMode)
+                            {
+                                Log.Message("[Vextex] Other mods also patch ApparelScoreGain: " +
+                                            string.Join(", ", ModCompat.OtherApparelScorePatchOwners) +
+                                            ". If you see conflicts, enable 'Another mod fully controls outfit AI' in Vextex settings.");
                             }
                         }
                     }
@@ -101,10 +98,14 @@ namespace Vextex
                 Log.Error($"[Vextex] Failed to load settings (using defaults): {ex.Message}");
                 Settings = new VextexSettings();
             }
+            if (Settings == null)
+                Settings = new VextexSettings();
         }
 
         public override void DoSettingsWindowContents(UnityEngine.Rect inRect)
         {
+            if (Settings == null)
+                return;
             try
             {
                 Settings.DoWindowContents(inRect);
